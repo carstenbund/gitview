@@ -209,7 +209,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
             records = extractor.extract_history(max_commits=max_commits, branch=branch)
             progress.update(task, completed=True)
 
-        console.print(f"[green]✓ Extracted {len(records)} commits[/green]\n")
+        console.print(f"[green]Extracted {len(records)} commits[/green]\n")
 
         # Save raw history
         history_file = Path(output) / "repo_history.jsonl"
@@ -224,7 +224,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
             kwargs['chunk_size'] = chunk_size
 
         phases = chunker.chunk(records, **kwargs)
-        console.print(f"[green]✓ Created {len(phases)} phases[/green]\n")
+        console.print(f"[green]Created {len(phases)} phases[/green]\n")
 
         # Display phase overview
         _display_phase_overview(phases)
@@ -237,7 +237,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
             console.print("\n[yellow]Skipping LLM summarization. Writing basic timeline...[/yellow]")
             timeline_file = Path(output) / "timeline.md"
             OutputWriter.write_simple_timeline(phases, str(timeline_file))
-            console.print(f"[green]✓ Wrote timeline to {timeline_file}[/green]\n")
+            console.print(f"[green]Wrote timeline to {timeline_file}[/green]\n")
             return
 
         # Step 3: Summarize phases with LLM
@@ -273,7 +273,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
                 summarizer._save_phase_with_summary(phase, str(phases_dir))
                 progress.update(task, advance=1)
 
-        console.print(f"[green]✓ Summarized all phases[/green]\n")
+        console.print(f"[green]Summarized all phases[/green]\n")
 
         # Step 4: Generate global story
         console.print("[bold]Step 4: Generating global narrative...[/bold]")
@@ -293,7 +293,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
             stories = storyteller.generate_global_story(phases, repo_name)
             progress.update(task, completed=True)
 
-        console.print(f"[green]✓ Generated global narrative[/green]\n")
+        console.print(f"[green]Generated global narrative[/green]\n")
 
         # Step 5: Write output
         console.print("[bold]Step 5: Writing output files...[/bold]")
@@ -302,22 +302,22 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
         # Write markdown report
         markdown_path = output_path / "history_story.md"
         OutputWriter.write_markdown(stories, phases, str(markdown_path), repo_name)
-        console.print(f"[green]✓ Wrote {markdown_path}[/green]")
+        console.print(f"[green]Wrote {markdown_path}[/green]")
 
         # Write JSON data
         json_path = output_path / "history_data.json"
         OutputWriter.write_json(stories, phases, str(json_path))
-        console.print(f"[green]✓ Wrote {json_path}[/green]")
+        console.print(f"[green]Wrote {json_path}[/green]")
 
         # Write timeline
         timeline_path = output_path / "timeline.md"
         OutputWriter.write_simple_timeline(phases, str(timeline_path))
-        console.print(f"[green]✓ Wrote {timeline_path}[/green]\n")
+        console.print(f"[green]Wrote {timeline_path}[/green]\n")
 
         # Success summary
-        console.print("[bold green]✓ Analysis complete![/bold green]\n")
-        console.print(f"📊 Analyzed {len(records)} commits across {len(phases)} phases")
-        console.print(f"📝 Output written to: {output_path.resolve()}\n")
+        console.print("[bold green]Analysis complete![/bold green]\n")
+        console.print(f"Analyzed {len(records)} commits across {len(phases)} phases")
+        console.print(f"Output written to: {output_path.resolve()}\n")
 
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
@@ -395,7 +395,7 @@ def extract(repo, output, max_commits, branch):
 
         extractor.save_to_jsonl(records, output)
 
-        console.print(f"\n[green]✓ Extracted {len(records)} commits to {output}[/green]\n")
+        console.print(f"\n[green]Extracted {len(records)} commits to {output}[/green]\n")
 
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
@@ -470,12 +470,12 @@ def chunk(history_file, output, strategy, chunk_size):
 
         phases = chunker.chunk(records, **kwargs)
 
-        console.print(f"[green]✓ Created {len(phases)} phases[/green]\n")
+        console.print(f"[green]Created {len(phases)} phases[/green]\n")
         _display_phase_overview(phases)
 
         # Save
         chunker.save_phases(phases, output)
-        console.print(f"\n[green]✓ Saved phases to {output}[/green]\n")
+        console.print(f"\n[green]Saved phases to {output}[/green]\n")
 
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
