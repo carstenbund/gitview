@@ -4,6 +4,10 @@
 
 GitView extracts your repository's git history and uses AI to generate compelling narratives about how your codebase evolved. Instead of manually reading through thousands of commits, get a comprehensive story of your project's journey.
 
+Example run on this repository: 
+
+[Example: output/history_story.md][output/history_story.md] 
+
 ## Features
 
 - ** Comprehensive History Extraction**: Extracts commit metadata, LOC changes, language breakdown, README evolution, comment analysis, and more
