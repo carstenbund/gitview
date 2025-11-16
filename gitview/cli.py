@@ -495,13 +495,13 @@ def _display_phase_overview(phases):
     for phase in phases:
         events = []
         if phase.has_large_deletion:
-            events.append("🗑️")
+            events.append("x")
         if phase.has_large_addition:
-            events.append("➕")
+            events.append("+")
         if phase.has_refactor:
-            events.append("♻️")
+            events.append(">>")
         if phase.readme_changed:
-            events.append("📝")
+            events.append(">")
 
         table.add_row(
             str(phase.phase_number),
