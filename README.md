@@ -6,8 +6,6 @@ GitView extracts your repository's git history and uses AI to generate compellin
 
 Example run on this repository: 
 
-[Example: output/history_story.md]
-
 [[(https://github.com/carstenbund/gitview/blob/main/output/history_story.md)] 
 ](https://github.com/carstenbund/gitview/blob/main/output/history_story.md)
 
