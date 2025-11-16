@@ -1,0 +1,27 @@
+# Include important files in source distribution
+include README.md
+include LICENSE
+include INSTALL.md
+include requirements.txt
+include verify_installation.py
+
+# Include executable wrapper
+recursive-include bin *
+
+# Include examples
+recursive-include examples *.py
+
+# Exclude unnecessary files
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude .git*
+
+# Exclude output and test files
+exclude output/
+exclude test_output/
+exclude *.jsonl
+exclude docs/history_story.md
+exclude docs/history_data.json
+exclude docs/timeline.md
