@@ -6,11 +6,11 @@ GitView extracts your repository's git history and uses AI to generate compellin
 
 ## Features
 
-- **📊 Comprehensive History Extraction**: Extracts commit metadata, LOC changes, language breakdown, README evolution, comment analysis, and more
-- **🧩 Smart Chunking**: Automatically divides history into meaningful "phases" or "epochs" based on significant changes
-- **🤖 LLM-Powered Summaries**: Uses Claude to generate narrative summaries for each phase
-- **📖 Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
-- **📝 Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
+- ** Comprehensive History Extraction**: Extracts commit metadata, LOC changes, language breakdown, README evolution, comment analysis, and more
+- ** Smart Chunking**: Automatically divides history into meaningful "phases" or "epochs" based on significant changes
+- ** LLM-Powered Summaries**: Uses Claude to generate narrative summaries for each phase
+- ** Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
+- ** Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
 
 ## Installation
 
