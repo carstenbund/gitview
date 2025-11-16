@@ -23,27 +23,142 @@ console = Console()
 def cli():
     """GitView - Git history analyzer with LLM-powered narrative generation.
 
-    Extract, analyze, and generate compelling narratives from your git repository's history.
+    \b
+    Extract, chunk, and use LLMs to generate compelling narratives from your
+    git repository's history.
+
+    \b
+    Quick Start:
+      # Using Anthropic Claude (default)
+      export ANTHROPIC_API_KEY="your-key"
+      gitview analyze
+
+      # Using OpenAI GPT
+      export OPENAI_API_KEY="your-key"
+      gitview analyze --backend openai
+
+      # Using local Ollama (no API key needed)
+      gitview analyze --backend ollama --model llama3
+
+    \b
+    See 'gitview analyze --help' for detailed LLM configuration options.
     """
     pass
 
 
-@cli.command()
-@click.option('--repo', '-r', default=".", help="Path to git repository")
-@click.option('--output', '-o', default="output", help="Output directory")
+ANALYZE_HELP = """Analyze git repository and generate narrative history.
+
+\b
+This command runs the full pipeline:
+  1. Extract git history with detailed metadata
+  2. Chunk commits into meaningful phases/epochs
+  3. Summarize each phase using LLM
+  4. Generate global narrative stories
+  5. Write markdown reports and JSON data
+
+\b
+LLM BACKEND CONFIGURATION:
+
+GitView supports three LLM backends:
+
+\b
+1. Anthropic Claude (default, requires API key):
+   export ANTHROPIC_API_KEY="your-key"
+   gitview analyze
+
+   Or: gitview analyze --backend anthropic --api-key "your-key"
+
+   Default model: claude-sonnet-4-5-20250929
+   Other models: claude-3-opus-20240229, claude-3-haiku-20240307
+
+\b
+2. OpenAI GPT (requires API key):
+   export OPENAI_API_KEY="your-key"
+   gitview analyze --backend openai
+
+   Default model: gpt-4
+   Other models: gpt-4-turbo-preview, gpt-3.5-turbo
+
+\b
+3. Ollama (local, FREE, no API key needed):
+   # Start Ollama server first: ollama serve
+   # Pull a model: ollama pull llama3
+   gitview analyze --backend ollama --model llama3
+
+   Popular models: llama3, mistral, codellama, mixtral
+   Default URL: http://localhost:11434
+
+\b
+Backend auto-detection:
+  If no --backend is specified, GitView checks environment variables:
+  - If ANTHROPIC_API_KEY is set → uses Anthropic
+  - If OPENAI_API_KEY is set → uses OpenAI
+  - Otherwise → uses Ollama (local)
+
+\b
+EXAMPLES:
+
+  # Analyze current directory with Claude (auto-detected)
+  export ANTHROPIC_API_KEY="sk-ant-..."
+  gitview analyze
+
+  # Use OpenAI GPT-4 with custom model
+  gitview analyze --backend openai --model gpt-4-turbo-preview
+
+  # Use local Ollama (no API costs!)
+  gitview analyze --backend ollama --model llama3
+
+  # Analyze specific repository
+  gitview analyze --repo /path/to/repo --output ./analysis
+
+  # Quick analysis without LLM (just extract and chunk)
+  gitview analyze --skip-llm
+
+  # Analyze last 100 commits only
+  gitview analyze --max-commits 100
+
+  # Adaptive chunking (default, splits on significant changes)
+  gitview analyze --strategy adaptive
+
+  # Fixed-size chunks (50 commits per phase)
+  gitview analyze --strategy fixed --chunk-size 50
+
+  # Use custom Ollama server
+  gitview analyze --backend ollama --ollama-url http://192.168.1.100:11434
+"""
+
+
+@cli.command(help=ANALYZE_HELP)
+@click.option('--repo', '-r', default=".",
+              help="Path to git repository (default: current directory)")
+@click.option('--output', '-o', default="output",
+              help="Output directory for reports and data")
 @click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive']),
-              default='adaptive', help="Chunking strategy")
+              default='adaptive',
+              help="Chunking strategy: 'adaptive' (default, splits on significant changes), "
+                   "'fixed' (N commits per phase), 'time' (by time period)")
 @click.option('--chunk-size', type=int, default=50,
-              help="Chunk size for fixed strategy")
-@click.option('--max-commits', type=int, help="Maximum commits to analyze")
-@click.option('--branch', default='HEAD', help="Branch to analyze")
+              help="Commits per chunk when using 'fixed' strategy")
+@click.option('--max-commits', type=int,
+              help="Maximum commits to analyze (default: all commits)")
+@click.option('--branch', default='HEAD',
+              help="Branch to analyze (default: HEAD/current branch)")
 @click.option('--backend', '-b', type=click.Choice(['anthropic', 'openai', 'ollama']),
-              help="LLM backend (auto-detected from environment if not specified)")
-@click.option('--model', '-m', help="Model identifier (uses backend defaults if not specified)")
-@click.option('--api-key', help="API key for the backend (defaults to env var)")
-@click.option('--ollama-url', default='http://localhost:11434', help="Ollama API URL")
-@click.option('--repo-name', help="Repository name for output")
-@click.option('--skip-llm', is_flag=True, help="Skip LLM summarization (extract and chunk only)")
+              help="LLM backend: 'anthropic' (Claude), 'openai' (GPT), 'ollama' (local). "
+                   "Auto-detected from env vars if not specified.")
+@click.option('--model', '-m',
+              help="Model identifier. Defaults: claude-sonnet-4-5-20250929 (Anthropic), "
+                   "gpt-4 (OpenAI), llama3 (Ollama)")
+@click.option('--api-key',
+              help="API key for Anthropic/OpenAI. Defaults to ANTHROPIC_API_KEY or "
+                   "OPENAI_API_KEY environment variable")
+@click.option('--ollama-url', default='http://localhost:11434',
+              help="Ollama server URL (only for --backend ollama)")
+@click.option('--repo-name',
+              help="Repository name for output (default: directory name)")
+@click.option('--skip-llm', is_flag=True,
+              help="Skip LLM summarization - only extract and chunk history "
+                   "(useful for quick analysis without API costs)")
 def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
            model, api_key, ollama_url, repo_name, skip_llm):
     """Analyze git repository and generate narrative history.
@@ -211,17 +326,54 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
         sys.exit(1)
 
 
-@cli.command()
-@click.option('--repo', '-r', default=".", help="Path to git repository")
-@click.option('--output', '-o', default="output/repo_history.jsonl",
-              help="Output JSONL file")
-@click.option('--max-commits', type=int, help="Maximum commits to extract")
-@click.option('--branch', default='HEAD', help="Branch to extract from")
-def extract(repo, output, max_commits, branch):
-    """Extract git history to JSONL file.
+EXTRACT_HELP = """Extract git history to JSONL file (no LLM needed).
 
-    This command only extracts the git history without chunking or summarization.
-    """
+\b
+This command extracts detailed metadata from git commits without using an LLM.
+Useful for:
+  - Quick history extraction
+  - Pre-processing for later analysis
+  - Exploring repository metrics
+
+\b
+Extracted data includes:
+  - Commit metadata (hash, author, date, message)
+  - Lines of code changes (insertions/deletions)
+  - Language breakdown per commit
+  - README evolution
+  - Comment density analysis
+  - Detection of large changes and refactors
+
+\b
+EXAMPLES:
+
+  # Extract full history to default location
+  gitview extract
+
+  # Extract to custom file
+  gitview extract --output my_history.jsonl
+
+  # Extract only last 100 commits
+  gitview extract --max-commits 100
+
+  # Extract from specific branch
+  gitview extract --branch develop
+
+  # Extract from different repository
+  gitview extract --repo /path/to/repo --output repo_data.jsonl
+"""
+
+
+@cli.command(help=EXTRACT_HELP)
+@click.option('--repo', '-r', default=".",
+              help="Path to git repository (default: current directory)")
+@click.option('--output', '-o', default="output/repo_history.jsonl",
+              help="Output JSONL file path")
+@click.option('--max-commits', type=int,
+              help="Maximum commits to extract (default: all commits)")
+@click.option('--branch', default='HEAD',
+              help="Branch to extract from (default: HEAD/current branch)")
+def extract(repo, output, max_commits, branch):
     console.print("\n[bold blue]Extracting Git History[/bold blue]\n")
 
     repo_path = Path(repo).resolve()
@@ -250,17 +402,56 @@ def extract(repo, output, max_commits, branch):
         sys.exit(1)
 
 
-@cli.command()
-@click.argument('history_file', type=click.Path(exists=True))
-@click.option('--output', '-o', default="output/phases", help="Output directory for phases")
-@click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive']),
-              default='adaptive', help="Chunking strategy")
-@click.option('--chunk-size', type=int, default=50, help="Chunk size for fixed strategy")
-def chunk(history_file, output, strategy, chunk_size):
-    """Chunk extracted history into phases.
+CHUNK_HELP = """Chunk extracted history into meaningful phases (no LLM needed).
 
-    Takes a JSONL file from the extract command and chunks it into phases.
-    """
+\b
+Takes a JSONL file from 'gitview extract' and splits it into phases/epochs
+based on the chosen strategy. No LLM or API key required.
+
+\b
+CHUNKING STRATEGIES:
+
+1. Adaptive (recommended):
+   Automatically splits when significant changes occur:
+   - LOC changes by >30%
+   - Large deletions or additions (>1000 lines)
+   - README rewrites
+   - Major refactorings
+
+2. Fixed:
+   Split into fixed-size chunks (e.g., 50 commits per phase)
+
+3. Time:
+   Split by time periods (week, month, quarter, year)
+
+\b
+EXAMPLES:
+
+  # Chunk with adaptive strategy (recommended)
+  gitview chunk repo_history.jsonl
+
+  # Chunk with fixed size (25 commits per phase)
+  gitview chunk repo_history.jsonl --strategy fixed --chunk-size 25
+
+  # Save phases to custom directory
+  gitview chunk repo_history.jsonl --output ./my_phases
+
+  # First extract, then chunk separately
+  gitview extract --output data.jsonl
+  gitview chunk data.jsonl --output phases/
+"""
+
+
+@cli.command(help=CHUNK_HELP)
+@click.argument('history_file', type=click.Path(exists=True))
+@click.option('--output', '-o', default="output/phases",
+              help="Output directory for phase JSON files")
+@click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive']),
+              default='adaptive',
+              help="Chunking strategy: 'adaptive' (default), 'fixed', 'time'")
+@click.option('--chunk-size', type=int, default=50,
+              help="Commits per chunk when using 'fixed' strategy")
+def chunk(history_file, output, strategy, chunk_size):
     console.print("\n[bold blue]Chunking History into Phases[/bold blue]\n")
 
     try:
