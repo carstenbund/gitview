@@ -26,14 +26,16 @@ pip install -e .
 ## Quick Start
 
 ```bash
-# Set your Anthropic API key
+# Using Anthropic Claude (default)
 export ANTHROPIC_API_KEY="your-api-key-here"
-
-# Analyze a repository (full pipeline)
-gitview analyze --repo /path/to/repo --output ./output
-
-# Analyze current directory
 gitview analyze
+
+# Using OpenAI GPT
+export OPENAI_API_KEY="your-api-key-here"
+gitview analyze --backend openai
+
+# Using local Ollama (no API key needed)
+gitview analyze --backend ollama --model llama3
 
 # Skip LLM summarization (just extract and chunk)
 gitview analyze --skip-llm
@@ -55,8 +57,10 @@ Options:
   --chunk-size INTEGER         Chunk size for fixed strategy (default: 50)
   --max-commits INTEGER        Maximum commits to analyze
   --branch TEXT                Branch to analyze (default: HEAD)
-  --api-key TEXT               Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
-  --model TEXT                 Claude model to use (default: claude-sonnet-4-5-20250929)
+  -b, --backend BACKEND        LLM backend: anthropic, openai, or ollama (auto-detected)
+  -m, --model TEXT             Model identifier (uses backend defaults if not specified)
+  --api-key TEXT               API key for the backend (defaults to env var)
+  --ollama-url TEXT            Ollama API URL (default: http://localhost:11434)
   --repo-name TEXT             Repository name for output
   --skip-llm                   Skip LLM summarization (extract and chunk only)
 ```
@@ -249,23 +253,79 @@ gitview chunk history.jsonl --strategy fixed --chunk-size 25 --output ./fixed-ph
 
 - Python 3.8+
 - Git repository with commit history
-- Anthropic API key (for LLM features)
-- Dependencies: gitpython, anthropic, click, rich, pydantic
+- **One of the following LLM backends:**
+  - **Anthropic Claude** (requires API key)
+  - **OpenAI GPT** (requires API key)
+  - **Ollama** (runs locally, no API key needed)
+- Dependencies: gitpython, anthropic, openai, requests, click, rich, pydantic
 
-## API Key
+## LLM Backend Configuration
 
-GitView uses the Anthropic Claude API for summarization. You need an API key from [Anthropic](https://www.anthropic.com/).
+GitView supports three LLM backends with automatic detection based on environment variables:
 
-Set it as an environment variable:
+### Anthropic Claude (Default)
+
+Get an API key from [Anthropic](https://www.anthropic.com/)
 
 ```bash
 export ANTHROPIC_API_KEY="your-api-key-here"
+gitview analyze
 ```
 
-Or pass it directly:
+Default models:
+- `claude-sonnet-4-5-20250929` (default)
+- `claude-3-opus-20240229` (more powerful)
+- `claude-3-haiku-20240307` (faster)
+
+### OpenAI GPT
+
+Get an API key from [OpenAI](https://platform.openai.com/)
 
 ```bash
-gitview analyze --api-key "your-api-key-here"
+export OPENAI_API_KEY="your-api-key-here"
+gitview analyze --backend openai
+```
+
+Default models:
+- `gpt-4` (default)
+- `gpt-4-turbo-preview` (faster)
+- `gpt-3.5-turbo` (cheaper)
+
+### Ollama (Local)
+
+Install [Ollama](https://ollama.ai/) and pull a model:
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Pull a model
+ollama pull llama3
+
+# Start Ollama server
+ollama serve
+
+# Use with GitView (no API key needed)
+gitview analyze --backend ollama --model llama3
+```
+
+Popular Ollama models:
+- `llama3` (default, balanced)
+- `mistral` (fast, good quality)
+- `codellama` (optimized for code)
+- `mixtral` (large, powerful)
+
+### Custom Configuration
+
+```bash
+# Specify custom model
+gitview analyze --backend anthropic --model claude-3-opus-20240229
+
+# Use custom Ollama URL
+gitview analyze --backend ollama --ollama-url http://192.168.1.100:11434
+
+# Pass API key directly (instead of env var)
+gitview analyze --backend openai --api-key "your-key"
 ```
 
 ## Use Cases

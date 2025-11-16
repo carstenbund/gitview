@@ -1,32 +1,30 @@
-"""LLM-based phase summarization using Anthropic Claude."""
+"""LLM-based phase summarization."""
 
 import json
 import os
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from anthropic import Anthropic
-
 from .chunker import Phase
+from .backends import LLMRouter, LLMMessage
 
 
 class PhaseSummarizer:
     """Summarize git history phases using LLM."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-5-20250929"):
+    def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
+                 api_key: Optional[str] = None, **kwargs):
         """
-        Initialize summarizer with Anthropic API.
+        Initialize summarizer with LLM backend.
 
         Args:
-            api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
-            model: Claude model to use
+            backend: LLM backend ('anthropic', 'openai', 'ollama')
+            model: Model identifier (uses backend defaults if not specified)
+            api_key: API key for the backend (if required)
+            **kwargs: Additional backend parameters
         """
-        self.api_key = api_key or os.environ.get('ANTHROPIC_API_KEY')
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in environment or parameters")
-
-        self.client = Anthropic(api_key=self.api_key)
-        self.model = model
+        self.router = LLMRouter(backend=backend, model=model, api_key=api_key, **kwargs)
+        self.model = self.router.model
 
     def summarize_phase(self, phase: Phase, context: Optional[str] = None) -> str:
         """
@@ -45,17 +43,11 @@ class PhaseSummarizer:
         # Build prompt
         prompt = self._build_phase_prompt(phase_data, context)
 
-        # Call Claude API
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+        # Call LLM backend
+        messages = [LLMMessage(role="user", content=prompt)]
+        response = self.router.generate(messages, max_tokens=2000)
 
-        summary = response.content[0].text
-        return summary.strip()
+        return response.content.strip()
 
     def summarize_all_phases(self, phases: List[Phase],
                             output_dir: Optional[str] = None) -> List[Phase]:
@@ -256,19 +248,23 @@ Write the summary now:"""
 
 def summarize_phases(phases: List[Phase],
                      output_dir: str = "output/phases",
+                     backend: Optional[str] = None,
+                     model: Optional[str] = None,
                      api_key: Optional[str] = None,
-                     model: str = "claude-sonnet-4-5-20250929") -> List[Phase]:
+                     **kwargs) -> List[Phase]:
     """
-    Summarize all phases using Claude.
+    Summarize all phases using LLM backend.
 
     Args:
         phases: List of Phase objects
         output_dir: Directory to save updated phases
-        api_key: Anthropic API key (defaults to env var)
-        model: Claude model to use
+        backend: LLM backend ('anthropic', 'openai', 'ollama')
+        model: Model identifier (uses backend defaults if not specified)
+        api_key: API key for the backend (if required)
+        **kwargs: Additional backend parameters
 
     Returns:
         List of Phase objects with summaries
     """
-    summarizer = PhaseSummarizer(api_key=api_key, model=model)
+    summarizer = PhaseSummarizer(backend=backend, model=model, api_key=api_key, **kwargs)
     return summarizer.summarize_all_phases(phases, output_dir)
