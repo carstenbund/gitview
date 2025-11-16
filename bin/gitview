@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""GitView executable wrapper.
+
+This is a simple wrapper script that can be executed directly
+from the repository without installation.
+
+Usage:
+    ./bin/gitview analyze
+    ./bin/gitview --help
+
+Or add bin/ to your PATH to use it like:
+    gitview analyze
+"""
+
+if __name__ == "__main__":
+    from gitview.cli import main
+    main()

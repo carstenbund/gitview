@@ -14,13 +14,86 @@ GitView extracts your repository's git history and uses AI to generate compellin
 
 ## Installation
 
+### Option 1: Install with pip (recommended)
+
+This creates a `gitview` command in your PATH:
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/gitview.git
 cd gitview
 
-# Install dependencies
+# Install in editable mode with dependencies
 pip install -e .
+
+# The gitview command is now available system-wide
+gitview --version
+gitview --help
+```
+
+**How it works:** The `pip install -e .` command reads `pyproject.toml` and `setup.py`, which define an entry point that creates `/usr/local/bin/gitview` (or similar on Windows) that calls `gitview.cli:main`.
+
+### Option 2: Run directly from repo (no installation)
+
+Use the executable wrapper in `bin/`:
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/gitview.git
+cd gitview
+
+# Install dependencies only
+pip install -r requirements.txt
+
+# Run directly from the repo
+./bin/gitview --version
+./bin/gitview analyze
+
+# Or add bin/ to your PATH
+export PATH="$PWD/bin:$PATH"
+gitview analyze
+```
+
+### Option 3: Run as Python module
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run as a module
+python -m gitview.cli --help
+python -m gitview.cli analyze
+```
+
+### Verify Installation
+
+Run the verification script to check everything is set up correctly:
+
+```bash
+python verify_installation.py
+```
+
+This will check:
+- Python version (3.8+ required)
+- All required dependencies
+- `gitview` command availability
+- LLM backend configuration (API keys, Ollama server)
+
+### Troubleshooting Installation
+
+If `gitview` command is not found after installation:
+
+```bash
+# Option 1: Use full path to module
+python -m gitview.cli analyze
+
+# Option 2: Reinstall in editable mode
+pip uninstall gitview -y
+pip install -e .
+
+# Option 3: Check if it's in your PATH
+which gitview  # Unix/Linux/Mac
+where gitview  # Windows
 ```
 
 ## Quick Start
