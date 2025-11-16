@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# GitView specific
+output/
+test_output/
+*.jsonl
+docs/history_story.md
+docs/history_data.json
+docs/timeline.md
