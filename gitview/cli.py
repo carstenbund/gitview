@@ -37,12 +37,15 @@ def cli():
               help="Chunk size for fixed strategy")
 @click.option('--max-commits', type=int, help="Maximum commits to analyze")
 @click.option('--branch', default='HEAD', help="Branch to analyze")
-@click.option('--api-key', help="Anthropic API key (defaults to ANTHROPIC_API_KEY env var)")
-@click.option('--model', default='claude-sonnet-4-5-20250929', help="Claude model to use")
+@click.option('--backend', '-b', type=click.Choice(['anthropic', 'openai', 'ollama']),
+              help="LLM backend (auto-detected from environment if not specified)")
+@click.option('--model', '-m', help="Model identifier (uses backend defaults if not specified)")
+@click.option('--api-key', help="API key for the backend (defaults to env var)")
+@click.option('--ollama-url', default='http://localhost:11434', help="Ollama API URL")
 @click.option('--repo-name', help="Repository name for output")
 @click.option('--skip-llm', is_flag=True, help="Skip LLM summarization (extract and chunk only)")
-def analyze(repo, output, strategy, chunk_size, max_commits, branch, api_key,
-           model, repo_name, skip_llm):
+def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
+           model, api_key, ollama_url, repo_name, skip_llm):
     """Analyze git repository and generate narrative history.
 
     This is the main command that runs the full pipeline:
@@ -69,7 +72,11 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, api_key,
     console.print(f"[cyan]Strategy:[/cyan] {strategy}")
 
     if not skip_llm:
-        console.print(f"[cyan]Model:[/cyan] {model}\n")
+        # Determine backend for display
+        from .backends import LLMRouter
+        router = LLMRouter(backend=backend, model=model, api_key=api_key, ollama_url=ollama_url)
+        console.print(f"[cyan]Backend:[/cyan] {router.backend_type.value}")
+        console.print(f"[cyan]Model:[/cyan] {router.model}\n")
     else:
         console.print("[yellow]Skipping LLM summarization[/yellow]\n")
 
@@ -120,7 +127,12 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, api_key,
 
         # Step 3: Summarize phases with LLM
         console.print("[bold]Step 3: Summarizing phases with LLM...[/bold]")
-        summarizer = PhaseSummarizer(api_key=api_key, model=model)
+        summarizer = PhaseSummarizer(
+            backend=backend,
+            model=model,
+            api_key=api_key,
+            ollama_url=ollama_url
+        )
 
         with Progress(
             SpinnerColumn(),
@@ -150,7 +162,12 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, api_key,
 
         # Step 4: Generate global story
         console.print("[bold]Step 4: Generating global narrative...[/bold]")
-        storyteller = StoryTeller(api_key=api_key, model=model)
+        storyteller = StoryTeller(
+            backend=backend,
+            model=model,
+            api_key=api_key,
+            ollama_url=ollama_url
+        )
 
         with Progress(
             SpinnerColumn(),

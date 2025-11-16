@@ -5,28 +5,26 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 
-from anthropic import Anthropic
-
 from .chunker import Phase
+from .backends import LLMRouter, LLMMessage
 
 
 class StoryTeller:
     """Generate global repository story from phase summaries."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-5-20250929"):
+    def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
+                 api_key: Optional[str] = None, **kwargs):
         """
-        Initialize storyteller with Anthropic API.
+        Initialize storyteller with LLM backend.
 
         Args:
-            api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
-            model: Claude model to use
+            backend: LLM backend ('anthropic', 'openai', 'ollama')
+            model: Model identifier (uses backend defaults if not specified)
+            api_key: API key for the backend (if required)
+            **kwargs: Additional backend parameters
         """
-        self.api_key = api_key or os.environ.get('ANTHROPIC_API_KEY')
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in environment or parameters")
-
-        self.client = Anthropic(api_key=self.api_key)
-        self.model = model
+        self.router = LLMRouter(backend=backend, model=model, api_key=api_key, **kwargs)
+        self.model = self.router.model
 
     def generate_global_story(self, phases: List[Phase],
                              repo_name: Optional[str] = None) -> Dict[str, str]:
@@ -112,65 +110,50 @@ class StoryTeller:
         """Generate high-level executive summary."""
         prompt = self._build_executive_summary_prompt(phase_summaries, repo_name)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        messages = [LLMMessage(role="user", content=prompt)]
+        response = self.router.generate(messages, max_tokens=1500)
 
-        return response.content[0].text.strip()
+        return response.content.strip()
 
     def _generate_timeline(self, phase_summaries: List[Dict[str, Any]],
                           repo_name: Optional[str] = None) -> str:
         """Generate chronological timeline."""
         prompt = self._build_timeline_prompt(phase_summaries, repo_name)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        messages = [LLMMessage(role="user", content=prompt)]
+        response = self.router.generate(messages, max_tokens=3000)
 
-        return response.content[0].text.strip()
+        return response.content.strip()
 
     def _generate_technical_evolution(self, phase_summaries: List[Dict[str, Any]],
                                      repo_name: Optional[str] = None) -> str:
         """Generate technical architecture evolution story."""
         prompt = self._build_technical_evolution_prompt(phase_summaries, repo_name)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        messages = [LLMMessage(role="user", content=prompt)]
+        response = self.router.generate(messages, max_tokens=3000)
 
-        return response.content[0].text.strip()
+        return response.content.strip()
 
     def _generate_deletion_story(self, phase_summaries: List[Dict[str, Any]],
                                 repo_name: Optional[str] = None) -> str:
         """Generate story of code deletions and cleanups."""
         prompt = self._build_deletion_story_prompt(phase_summaries, repo_name)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        messages = [LLMMessage(role="user", content=prompt)]
+        response = self.router.generate(messages, max_tokens=2000)
 
-        return response.content[0].text.strip()
+        return response.content.strip()
 
     def _generate_full_narrative(self, phase_summaries: List[Dict[str, Any]],
                                 repo_name: Optional[str] = None) -> str:
         """Generate complete detailed narrative."""
         prompt = self._build_full_narrative_prompt(phase_summaries, repo_name)
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        messages = [LLMMessage(role="user", content=prompt)]
+        response = self.router.generate(messages, max_tokens=4000)
 
-        return response.content[0].text.strip()
+        return response.content.strip()
 
     def _build_executive_summary_prompt(self, phase_summaries: List[Dict[str, Any]],
                                        repo_name: Optional[str]) -> str:
@@ -347,19 +330,23 @@ Write the full narrative now:"""
 
 def generate_story(phases: List[Phase],
                   repo_name: Optional[str] = None,
+                  backend: Optional[str] = None,
+                  model: Optional[str] = None,
                   api_key: Optional[str] = None,
-                  model: str = "claude-sonnet-4-5-20250929") -> Dict[str, str]:
+                  **kwargs) -> Dict[str, str]:
     """
     Generate global repository story.
 
     Args:
         phases: List of Phase objects with summaries
         repo_name: Optional repository name
-        api_key: Anthropic API key (defaults to env var)
-        model: Claude model to use
+        backend: LLM backend ('anthropic', 'openai', 'ollama')
+        model: Model identifier (uses backend defaults if not specified)
+        api_key: API key for the backend (if required)
+        **kwargs: Additional backend parameters
 
     Returns:
         Dict with story sections
     """
-    storyteller = StoryTeller(api_key=api_key, model=model)
+    storyteller = StoryTeller(backend=backend, model=model, api_key=api_key, **kwargs)
     return storyteller.generate_global_story(phases, repo_name)
