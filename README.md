@@ -39,16 +39,30 @@ pip install -r requirements.txt
 python -m gitview.cli --help
 ```
 
+### Verify Installation
+
+Run the verification script to check everything is set up correctly:
+
+```bash
+python verify_installation.py
+```
+
+This will check:
+- Python version (3.8+ required)
+- All required dependencies
+- `gitview` command availability
+- LLM backend configuration (API keys, Ollama server)
+
 ### Troubleshooting Installation
 
 If `gitview` command is not found after installation:
 
 ```bash
-# Option 1: Use full path
+# Option 1: Use full path to module
 python -m gitview.cli analyze
 
 # Option 2: Reinstall in editable mode
-pip uninstall gitview
+pip uninstall gitview -y
 pip install -e .
 
 # Option 3: Check if it's in your PATH
