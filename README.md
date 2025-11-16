@@ -14,13 +14,46 @@ GitView extracts your repository's git history and uses AI to generate compellin
 
 ## Installation
 
+### Option 1: Install from source (recommended for development)
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/gitview.git
 cd gitview
 
-# Install dependencies
+# Install in editable mode with dependencies
 pip install -e .
+
+# Verify installation
+gitview --version
+gitview --help
+```
+
+### Option 2: Direct installation
+
+```bash
+# Install dependencies first
+pip install -r requirements.txt
+
+# Run directly as a module
+python -m gitview.cli --help
+```
+
+### Troubleshooting Installation
+
+If `gitview` command is not found after installation:
+
+```bash
+# Option 1: Use full path
+python -m gitview.cli analyze
+
+# Option 2: Reinstall in editable mode
+pip uninstall gitview
+pip install -e .
+
+# Option 3: Check if it's in your PATH
+which gitview  # Unix/Linux/Mac
+where gitview  # Windows
 ```
 
 ## Quick Start
