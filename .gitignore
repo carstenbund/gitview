@@ -213,3 +213,6 @@ test_output/
 docs/history_story.md
 docs/history_data.json
 docs/timeline.md
+
+# Don't ignore bin/gitview executable
+!bin/gitview
