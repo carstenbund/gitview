@@ -90,13 +90,13 @@ class OutputWriter:
                 # Events
                 events = []
                 if phase.has_large_deletion:
-                    events.append("🗑️ Large Deletion")
+                    events.append("Large Deletion")
                 if phase.has_large_addition:
-                    events.append("➕ Large Addition")
+                    events.append("Large Addition")
                 if phase.has_refactor:
-                    events.append("♻️ Refactoring")
+                    events.append("Refactoring")
                 if phase.readme_changed:
-                    events.append("📝 README Changed")
+                    events.append("README Changed")
 
                 if events:
                     f.write(f"**Events:** {' | '.join(events)}\n\n")
