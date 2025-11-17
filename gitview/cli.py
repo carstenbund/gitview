@@ -125,6 +125,36 @@ EXAMPLES:
 
   # Use custom Ollama server
   gitview analyze --backend ollama --ollama-url http://192.168.1.100:11434
+
+\b
+INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
+
+  For managers analyzing multiple projects on an ongoing basis, incremental
+  analysis dramatically reduces costs by reusing previous LLM summaries.
+
+  # Initial full analysis
+  gitview analyze --output reports/myproject
+
+  # Later: incremental update (only analyzes new commits)
+  gitview analyze --output reports/myproject --incremental
+
+  # Manual incremental from specific commit
+  gitview analyze --since-commit abc123def
+
+  # Incremental from date
+  gitview analyze --since-date 2025-11-01
+
+  How it works:
+  - Detects previous analysis in output directory
+  - Extracts only commits since last run
+  - Reuses existing phase summaries (no LLM calls!)
+  - Only summarizes new/modified phases
+  - Updates JSON with new metadata
+
+  Benefits:
+  - Massive API cost savings for ongoing monitoring
+  - Much faster analysis (only processes new commits)
+  - Perfect for CI/CD integration or periodic reviews
 """
 
 
