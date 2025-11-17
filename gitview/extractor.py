@@ -136,7 +136,74 @@ class GitHistoryExtractor:
         commits.reverse()
 
         # Calculate cumulative LOC
-        total_loc = 0
+        return self._calculate_cumulative_loc(commits)
+
+    def extract_incremental(self, since_commit: str = None, since_date: str = None,
+                           branch: str = "HEAD") -> List[CommitRecord]:
+        """Extract only new commits since a specific commit or date.
+
+        Args:
+            since_commit: Commit hash to start from (exclusive)
+            since_date: ISO date string to start from (exclusive)
+            branch: Branch to extract from (default: HEAD)
+
+        Returns:
+            List of CommitRecord objects for new commits, sorted chronologically (oldest first)
+        """
+        commits = []
+
+        # Build revision range
+        if since_commit:
+            # Extract commits from since_commit..HEAD (exclusive of since_commit)
+            revision = f"{since_commit}..{branch}"
+        elif since_date:
+            # Extract commits after the given date
+            commit_iterator = self.repo.iter_commits(
+                branch,
+                since=since_date
+            )
+            for commit in commit_iterator:
+                try:
+                    record = self._extract_commit_record(commit)
+                    commits.append(record)
+                except Exception as e:
+                    print(f"Warning: Failed to extract commit {commit.hexsha[:8]}: {e}")
+                    continue
+
+            # Sort chronologically and calculate LOC
+            commits.reverse()
+            return self._calculate_cumulative_loc(commits)
+        else:
+            raise ValueError("Must provide either since_commit or since_date")
+
+        # Extract commits in the range
+        commit_iterator = self.repo.iter_commits(revision)
+
+        for commit in commit_iterator:
+            try:
+                record = self._extract_commit_record(commit)
+                commits.append(record)
+            except Exception as e:
+                print(f"Warning: Failed to extract commit {commit.hexsha[:8]}: {e}")
+                continue
+
+        # Sort chronologically (oldest first)
+        commits.reverse()
+
+        return commits
+
+    def _calculate_cumulative_loc(self, commits: List[CommitRecord],
+                                  starting_loc: int = 0) -> List[CommitRecord]:
+        """Calculate cumulative LOC for a list of commits.
+
+        Args:
+            commits: List of CommitRecord objects
+            starting_loc: Starting LOC count (for incremental analysis)
+
+        Returns:
+            Same list with loc_total updated
+        """
+        total_loc = starting_loc
         for record in commits:
             total_loc += (record.loc_added - record.loc_deleted)
             record.loc_total = max(0, total_loc)

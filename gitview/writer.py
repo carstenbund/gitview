@@ -12,6 +12,27 @@ class OutputWriter:
     """Write git history stories to various formats."""
 
     @staticmethod
+    def load_previous_analysis(output_path: str) -> Dict[str, Any]:
+        """
+        Load previous analysis from JSON file.
+
+        Args:
+            output_path: Path to output directory containing history_data.json
+
+        Returns:
+            Dict with previous analysis data, or None if not found
+        """
+        json_file = Path(output_path) / "history_data.json"
+        if not json_file.exists():
+            return None
+
+        try:
+            with open(json_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
+
+    @staticmethod
     def write_markdown(stories: Dict[str, str], phases: List[Phase],
                       output_path: str, repo_name: str = "Repository"):
         """
@@ -164,20 +185,39 @@ class OutputWriter:
             f.write("\n")
 
     @staticmethod
-    def write_json(stories: Dict[str, str], phases: List[Phase], output_path: str):
+    def write_json(stories: Dict[str, str], phases: List[Phase], output_path: str,
+                   repo_path: str = None):
         """
-        Write complete data to JSON file.
+        Write complete data to JSON file with metadata for incremental analysis.
 
         Args:
             stories: Dict of story sections
             phases: List of Phase objects
             output_path: Path to output JSON file
+            repo_path: Path to git repository (for metadata)
         """
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        data = {
+        # Calculate metadata from phases
+        metadata = {
             'generated_at': datetime.now().isoformat(),
+            'total_commits_analyzed': sum(p.commit_count for p in phases),
+        }
+
+        # Add last commit info if phases exist
+        if phases:
+            last_phase = phases[-1]
+            if last_phase.commits:
+                last_commit = last_phase.commits[-1]
+                metadata['last_commit_hash'] = last_commit.commit_hash
+                metadata['last_commit_date'] = last_commit.timestamp
+
+        if repo_path:
+            metadata['repository_path'] = str(Path(repo_path).resolve())
+
+        data = {
+            'metadata': metadata,
             'total_phases': len(phases),
             'total_commits': sum(p.commit_count for p in phases),
             'stories': stories,
