@@ -285,11 +285,11 @@ class GitHistoryExtractor:
         if not commit.parents:
             # Initial commit
             try:
-                diff_index = commit.diff(git.NULL_TREE)
+                diff_index = commit.diff(git.NULL_TREE, create_patch=True)
             except:
                 return stats
         else:
-            diff_index = commit.parents[0].diff(commit)
+            diff_index = commit.parents[0].diff(commit, create_patch=True)
 
         for diff in diff_index:
             try:
@@ -306,8 +306,9 @@ class GitHistoryExtractor:
                 # Get line changes
                 if diff.diff:
                     diff_text = diff.diff.decode('utf-8', errors='ignore')
-                    insertions = len([l for l in diff_text.split('\n') if l.startswith('+')])
-                    deletions = len([l for l in diff_text.split('\n') if l.startswith('-')])
+                    # Exclude diff headers (---, +++) from line counts
+                    insertions = len([l for l in diff_text.split('\n') if l.startswith('+') and not l.startswith('+++')])
+                    deletions = len([l for l in diff_text.split('\n') if l.startswith('-') and not l.startswith('---')])
 
                     stats['insertions'] += insertions
                     stats['deletions'] += deletions
@@ -379,9 +380,9 @@ class GitHistoryExtractor:
 
         try:
             if not commit.parents:
-                diff_index = commit.diff(git.NULL_TREE)
+                diff_index = commit.diff(git.NULL_TREE, create_patch=True)
             else:
-                diff_index = commit.parents[0].diff(commit)
+                diff_index = commit.parents[0].diff(commit, create_patch=True)
 
             for diff in diff_index:
                 if not diff.b_blob:
