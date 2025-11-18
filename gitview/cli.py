@@ -125,6 +125,36 @@ EXAMPLES:
 
   # Use custom Ollama server
   gitview analyze --backend ollama --ollama-url http://192.168.1.100:11434
+
+\b
+INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
+
+  For managers analyzing multiple projects on an ongoing basis, incremental
+  analysis dramatically reduces costs by reusing previous LLM summaries.
+
+  # Initial full analysis
+  gitview analyze --output reports/myproject
+
+  # Later: incremental update (only analyzes new commits)
+  gitview analyze --output reports/myproject --incremental
+
+  # Manual incremental from specific commit
+  gitview analyze --since-commit abc123def
+
+  # Incremental from date
+  gitview analyze --since-date 2025-11-01
+
+  How it works:
+  - Detects previous analysis in output directory
+  - Extracts only commits since last run
+  - Reuses existing phase summaries (no LLM calls!)
+  - Only summarizes new/modified phases
+  - Updates JSON with new metadata
+
+  Benefits:
+  - Massive API cost savings for ongoing monitoring
+  - Much faster analysis (only processes new commits)
+  - Perfect for CI/CD integration or periodic reviews
 """
 
 
@@ -159,8 +189,16 @@ EXAMPLES:
 @click.option('--skip-llm', is_flag=True,
               help="Skip LLM summarization - only extract and chunk history "
                    "(useful for quick analysis without API costs)")
+@click.option('--incremental', is_flag=True,
+              help="Incremental analysis: only process commits since last run. "
+                   "Automatically detects previous analysis in output directory")
+@click.option('--since-commit',
+              help="Extract commits since this commit hash (for manual incremental analysis)")
+@click.option('--since-date',
+              help="Extract commits since this date (ISO format: YYYY-MM-DD)")
 def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
-           model, api_key, ollama_url, repo_name, skip_llm):
+           model, api_key, ollama_url, repo_name, skip_llm, incremental,
+           since_commit, since_date):
     """Analyze git repository and generate narrative history.
 
     This is the main command that runs the full pipeline:
@@ -196,6 +234,36 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
         console.print("[yellow]Skipping LLM summarization[/yellow]\n")
 
     try:
+        # Check for incremental analysis
+        previous_analysis = None
+        existing_phases = []
+        starting_loc = 0
+
+        if incremental or since_commit or since_date:
+            # Load previous analysis
+            previous_analysis = OutputWriter.load_previous_analysis(output)
+
+            if incremental and not previous_analysis:
+                console.print("[yellow]Warning: --incremental specified but no previous analysis found.[/yellow]")
+                console.print("[yellow]Running full analysis instead...[/yellow]\n")
+                incremental = False
+            elif previous_analysis:
+                metadata = previous_analysis.get('metadata', {})
+                last_hash = metadata.get('last_commit_hash')
+                last_date = metadata.get('last_commit_date')
+
+                if incremental:
+                    since_commit = last_hash
+                    console.print(f"[cyan]Incremental mode:[/cyan] Analyzing commits since {last_hash[:8]}")
+                    console.print(f"[cyan]Last analysis:[/cyan] {metadata.get('generated_at', 'unknown')}\n")
+
+                # Load existing phases
+                from .chunker import Phase
+                existing_phases = [Phase.from_dict(p) for p in previous_analysis.get('phases', [])]
+
+                if existing_phases and existing_phases[-1].commits:
+                    starting_loc = existing_phases[-1].commits[-1].loc_total
+
         # Step 1: Extract git history
         console.print("[bold]Step 1: Extracting git history...[/bold]")
         extractor = GitHistoryExtractor(str(repo_path))
@@ -206,10 +274,32 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
             console=console
         ) as progress:
             task = progress.add_task("Extracting commits...", total=None)
-            records = extractor.extract_history(max_commits=max_commits, branch=branch)
+
+            # Use incremental extraction if requested
+            if since_commit or since_date:
+                records = extractor.extract_incremental(
+                    since_commit=since_commit,
+                    since_date=since_date,
+                    branch=branch
+                )
+                # Adjust LOC to continue from previous analysis
+                if starting_loc > 0:
+                    extractor._calculate_cumulative_loc(records, starting_loc)
+            else:
+                records = extractor.extract_history(max_commits=max_commits, branch=branch)
+
             progress.update(task, completed=True)
 
-        console.print(f"[green]Extracted {len(records)} commits[/green]\n")
+        if since_commit or since_date:
+            console.print(f"[green]Extracted {len(records)} new commits[/green]\n")
+
+            # Exit early if no new commits
+            if len(records) == 0:
+                console.print("[yellow]No new commits found since last analysis.[/yellow]")
+                console.print("[green]Repository is up to date![/green]\n")
+                return
+        else:
+            console.print(f"[green]Extracted {len(records)} commits[/green]\n")
 
         # Save raw history
         history_file = Path(output) / "repo_history.jsonl"
@@ -223,8 +313,47 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
         if strategy == 'fixed':
             kwargs['chunk_size'] = chunk_size
 
-        phases = chunker.chunk(records, **kwargs)
-        console.print(f"[green]Created {len(phases)} phases[/green]\n")
+        # Handle incremental phase management
+        if existing_phases and len(records) > 0:
+            # Incremental mode: merge new commits with existing phases
+            merge_threshold = 10  # commits - merge if fewer, create new phase if more
+
+            if len(records) < merge_threshold:
+                # Append new commits to last phase
+                console.print(f"[yellow]Merging {len(records)} new commits into last phase...[/yellow]")
+                last_phase = existing_phases[-1]
+                last_phase.commits.extend(records)
+
+                # Recalculate phase stats
+                from .chunker import Phase
+                last_phase.commit_count = len(last_phase.commits)
+                last_phase.end_date = records[-1].timestamp
+                last_phase.total_insertions = sum(c.insertions for c in last_phase.commits)
+                last_phase.total_deletions = sum(c.deletions for c in last_phase.commits)
+                last_phase.loc_end = records[-1].loc_total
+                last_phase.loc_delta = last_phase.loc_end - last_phase.loc_start
+                if last_phase.loc_start > 0:
+                    last_phase.loc_delta_percent = (last_phase.loc_delta / last_phase.loc_start) * 100
+
+                # Clear summary so it will be regenerated
+                last_phase.summary = None
+
+                phases = existing_phases
+                console.print(f"[green]Updated last phase (now {last_phase.commit_count} commits)[/green]\n")
+            else:
+                # Create new phases for new commits
+                new_phases = chunker.chunk(records, **kwargs)
+
+                # Renumber new phases to continue from existing
+                for phase in new_phases:
+                    phase.phase_number = len(existing_phases) + phase.phase_number
+
+                phases = existing_phases + new_phases
+                console.print(f"[green]Created {len(new_phases)} new phases (total: {len(phases)})[/green]\n")
+        else:
+            # Full analysis: chunk normally
+            phases = chunker.chunk(records, **kwargs)
+            console.print(f"[green]Created {len(phases)} phases[/green]\n")
 
         # Display phase overview
         _display_phase_overview(phases)
@@ -249,31 +378,44 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
             ollama_url=ollama_url
         )
 
+        # Identify phases that need summarization (no summary)
+        phases_to_summarize = [p for p in phases if p.summary is None]
+
+        if previous_analysis and len(phases_to_summarize) < len(phases):
+            console.print(f"[cyan]Incremental mode: {len(phases_to_summarize)} phases need summarization "
+                         f"({len(phases) - len(phases_to_summarize)} already summarized)[/cyan]")
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console
         ) as progress:
-            task = progress.add_task("Summarizing phases...", total=len(phases))
+            task = progress.add_task("Summarizing phases...", total=len(phases_to_summarize))
 
+            # Build previous summaries from all phases (including existing ones)
             previous_summaries = []
             for i, phase in enumerate(phases):
-                progress.update(task, description=f"Summarizing phase {i+1}/{len(phases)}...")
+                progress.update(task, description=f"Processing phase {i+1}/{len(phases)}...")
 
-                context = summarizer._build_context(previous_summaries)
-                summary = summarizer.summarize_phase(phase, context)
-                phase.summary = summary
+                if phase.summary is None:
+                    # Need to summarize this phase
+                    context = summarizer._build_context(previous_summaries)
+                    summary = summarizer.summarize_phase(phase, context)
+                    phase.summary = summary
+                    progress.update(task, advance=1)
 
                 previous_summaries.append({
                     'phase_number': phase.phase_number,
-                    'summary': summary,
+                    'summary': phase.summary,
                     'loc_delta': phase.loc_delta,
                 })
 
                 summarizer._save_phase_with_summary(phase, str(phases_dir))
-                progress.update(task, advance=1)
 
-        console.print(f"[green]Summarized all phases[/green]\n")
+        if len(phases_to_summarize) > 0:
+            console.print(f"[green]Summarized {len(phases_to_summarize)} phase(s)[/green]\n")
+        else:
+            console.print(f"[green]All phases already summarized[/green]\n")
 
         # Step 4: Generate global story
         console.print("[bold]Step 4: Generating global narrative...[/bold]")
@@ -304,9 +446,9 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
         OutputWriter.write_markdown(stories, phases, str(markdown_path), repo_name)
         console.print(f"[green]Wrote {markdown_path}[/green]")
 
-        # Write JSON data
+        # Write JSON data with metadata for incremental analysis
         json_path = output_path / "history_data.json"
-        OutputWriter.write_json(stories, phases, str(json_path))
+        OutputWriter.write_json(stories, phases, str(json_path), repo_path=str(repo_path))
         console.print(f"[green]Wrote {json_path}[/green]")
 
         # Write timeline
