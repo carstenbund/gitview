@@ -14,6 +14,7 @@ from .chunker import HistoryChunker
 from .summarizer import PhaseSummarizer
 from .storyteller import StoryTeller
 from .writer import OutputWriter
+from .remote import RemoteRepoHandler
 
 console = Console()
 
@@ -55,6 +56,29 @@ This command runs the full pipeline:
   3. Summarize each phase using LLM
   4. Generate global narrative stories
   5. Write markdown reports and JSON data
+
+\b
+REPOSITORY SOURCES:
+
+GitView supports both local and remote repositories:
+
+  Local repository:
+    gitview analyze --repo /path/to/repo
+
+  GitHub shortcut (automatically clones):
+    gitview analyze --repo org/repo
+
+  Full HTTPS URL:
+    gitview analyze --repo https://github.com/org/repo.git
+
+  SSH URL:
+    gitview analyze --repo git@github.com:org/repo.git
+
+For remote repositories:
+  - Automatically clones to temporary directory
+  - Cleans up temp clone after analysis (use --keep-clone to preserve)
+  - Outputs to ~/Documents/gitview/github.com/org/repo/ by default
+  - Warns if repository is very large (>100MB)
 
 \b
 LLM BACKEND CONFIGURATION:
@@ -160,9 +184,9 @@ INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
 
 @cli.command(help=ANALYZE_HELP)
 @click.option('--repo', '-r', default=".",
-              help="Path to git repository (default: current directory)")
-@click.option('--output', '-o', default="output",
-              help="Output directory for reports and data")
+              help="Repository: local path, GitHub shortcut (org/repo), or full URL")
+@click.option('--output', '-o', default=None,
+              help="Output directory (default: auto-generated based on repo)")
 @click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive']),
               default='adaptive',
               help="Chunking strategy: 'adaptive' (default, splits on significant changes), "
@@ -196,9 +220,11 @@ INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
               help="Extract commits since this commit hash (for manual incremental analysis)")
 @click.option('--since-date',
               help="Extract commits since this date (ISO format: YYYY-MM-DD)")
+@click.option('--keep-clone', is_flag=True,
+              help="Keep temporary clone of remote repository (default: cleanup after analysis)")
 def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
            model, api_key, ollama_url, repo_name, skip_llm, incremental,
-           since_commit, since_date):
+           since_commit, since_date, keep_clone):
     """Analyze git repository and generate narrative history.
 
     This is the main command that runs the full pipeline:
@@ -210,30 +236,54 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
     """
     console.print("\n[bold blue]GitView - Repository History Analyzer[/bold blue]\n")
 
-    # Validate repository
-    repo_path = Path(repo).resolve()
-    if not (repo_path / '.git').exists():
-        console.print(f"[red]Error: {repo_path} is not a git repository[/red]")
-        sys.exit(1)
-
-    # Get repo name if not provided
-    if not repo_name:
-        repo_name = repo_path.name
-
-    console.print(f"[cyan]Repository:[/cyan] {repo_path}")
-    console.print(f"[cyan]Output:[/cyan] {output}")
-    console.print(f"[cyan]Strategy:[/cyan] {strategy}")
-
-    if not skip_llm:
-        # Determine backend for display
-        from .backends import LLMRouter
-        router = LLMRouter(backend=backend, model=model, api_key=api_key, ollama_url=ollama_url)
-        console.print(f"[cyan]Backend:[/cyan] {router.backend_type.value}")
-        console.print(f"[cyan]Model:[/cyan] {router.model}\n")
-    else:
-        console.print("[yellow]Skipping LLM summarization[/yellow]\n")
+    # Handle remote repository detection and cloning
+    repo_handler = RemoteRepoHandler(repo)
+    cloned_repo_path = None
 
     try:
+        if repo_handler.is_local:
+            # Local repository
+            repo_path = repo_handler.get_local_path()
+            if not (repo_path / '.git').exists():
+                console.print(f"[red]Error: {repo_path} is not a git repository[/red]")
+                sys.exit(1)
+
+            # Get repo name if not provided
+            if not repo_name:
+                repo_name = repo_path.name
+
+            # Set default output if not provided
+            if output is None:
+                output = "output"
+
+        else:
+            # Remote repository - clone it
+            console.print(f"[cyan]Remote repository detected:[/cyan] {repo_handler.repo_info.short_name}\n")
+
+            cloned_repo_path = repo_handler.clone()
+            repo_path = cloned_repo_path
+
+            # Get repo name from repo info
+            if not repo_name:
+                repo_name = repo_handler.repo_info.repo
+
+            # Set default output path for remote repos
+            if output is None:
+                output = str(repo_handler.get_default_output_path())
+                console.print(f"[cyan]Output will be saved to:[/cyan] {output}\n")
+
+        console.print(f"[cyan]Repository:[/cyan] {repo_path}")
+        console.print(f"[cyan]Output:[/cyan] {output}")
+        console.print(f"[cyan]Strategy:[/cyan] {strategy}")
+
+        if not skip_llm:
+            # Determine backend for display
+            from .backends import LLMRouter
+            router = LLMRouter(backend=backend, model=model, api_key=api_key, ollama_url=ollama_url)
+            console.print(f"[cyan]Backend:[/cyan] {router.backend_type.value}")
+            console.print(f"[cyan]Model:[/cyan] {router.model}\n")
+        else:
+            console.print("[yellow]Skipping LLM summarization[/yellow]\n")
         # Check for incremental analysis
         previous_analysis = None
         existing_phases = []
@@ -466,6 +516,13 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+    finally:
+        # Cleanup temporary clone if it exists and --keep-clone not specified
+        if cloned_repo_path and not keep_clone:
+            repo_handler.cleanup()
+        elif cloned_repo_path and keep_clone:
+            console.print(f"\n[cyan]Temporary clone preserved at:[/cyan] {cloned_repo_path}")
 
 
 EXTRACT_HELP = """Extract git history to JSONL file (no LLM needed).
