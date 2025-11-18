@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import click
 from rich.console import Console
@@ -15,6 +16,8 @@ from .summarizer import PhaseSummarizer
 from .storyteller import StoryTeller
 from .writer import OutputWriter
 from .remote import RemoteRepoHandler
+from .branches import BranchManager, parse_branch_spec
+from .index_writer import IndexWriter
 
 console = Console()
 
@@ -182,6 +185,254 @@ INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
 """
 
 
+def _analyze_single_branch(
+    repo_path: str,
+    branch: str,
+    output: str,
+    repo_name: str,
+    strategy: str,
+    chunk_size: int,
+    max_commits: Optional[int],
+    backend: Optional[str],
+    model: Optional[str],
+    api_key: Optional[str],
+    ollama_url: str,
+    skip_llm: bool,
+    incremental: bool,
+    since_commit: Optional[str],
+    since_date: Optional[str]
+):
+    """Analyze a single branch (helper function for multi-branch support)."""
+    from typing import Optional
+
+    # Check for incremental analysis
+    previous_analysis = None
+    existing_phases = []
+    starting_loc = 0
+
+    if incremental or since_commit or since_date:
+        # Load previous analysis
+        previous_analysis = OutputWriter.load_previous_analysis(output)
+
+        if incremental and not previous_analysis:
+            console.print("[yellow]Warning: --incremental specified but no previous analysis found.[/yellow]")
+            console.print("[yellow]Running full analysis instead...[/yellow]\n")
+            incremental = False
+        elif previous_analysis:
+            metadata = previous_analysis.get('metadata', {})
+            last_hash = metadata.get('last_commit_hash')
+            last_date = metadata.get('last_commit_date')
+
+            if incremental:
+                since_commit = last_hash
+                console.print(f"[cyan]Incremental mode:[/cyan] Analyzing commits since {last_hash[:8]}")
+                console.print(f"[cyan]Last analysis:[/cyan] {metadata.get('generated_at', 'unknown')}\n")
+
+            # Load existing phases
+            from .chunker import Phase
+            existing_phases = [Phase.from_dict(p) for p in previous_analysis.get('phases', [])]
+
+            if existing_phases and existing_phases[-1].commits:
+                starting_loc = existing_phases[-1].commits[-1].loc_total
+
+    # Step 1: Extract git history
+    console.print("[bold]Step 1: Extracting git history...[/bold]")
+    extractor = GitHistoryExtractor(repo_path)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console
+    ) as progress:
+        task = progress.add_task("Extracting commits...", total=None)
+
+        # Use incremental extraction if requested
+        if since_commit or since_date:
+            records = extractor.extract_incremental(
+                since_commit=since_commit,
+                since_date=since_date,
+                branch=branch
+            )
+            # Adjust LOC to continue from previous analysis
+            if starting_loc > 0:
+                extractor._calculate_cumulative_loc(records, starting_loc)
+        else:
+            records = extractor.extract_history(max_commits=max_commits, branch=branch)
+
+        progress.update(task, completed=True)
+
+    if since_commit or since_date:
+        console.print(f"[green]Extracted {len(records)} new commits[/green]\n")
+
+        # Exit early if no new commits
+        if len(records) == 0:
+            console.print("[yellow]No new commits found since last analysis.[/yellow]")
+            console.print("[green]Branch is up to date![/green]\n")
+            return
+    else:
+        console.print(f"[green]Extracted {len(records)} commits[/green]\n")
+
+    # Save raw history
+    history_file = Path(output) / "repo_history.jsonl"
+    extractor.save_to_jsonl(records, str(history_file))
+
+    # Step 2: Chunk into phases
+    console.print("[bold]Step 2: Chunking into phases...[/bold]")
+    chunker = HistoryChunker(strategy)
+
+    kwargs = {}
+    if strategy == 'fixed':
+        kwargs['chunk_size'] = chunk_size
+
+    # Handle incremental phase management
+    if existing_phases and len(records) > 0:
+        # Incremental mode: merge new commits with existing phases
+        merge_threshold = 10  # commits - merge if fewer, create new phase if more
+
+        if len(records) < merge_threshold:
+            # Append new commits to last phase
+            console.print(f"[yellow]Merging {len(records)} new commits into last phase...[/yellow]")
+            last_phase = existing_phases[-1]
+            last_phase.commits.extend(records)
+
+            # Recalculate phase stats
+            from .chunker import Phase
+            last_phase.commit_count = len(last_phase.commits)
+            last_phase.end_date = records[-1].timestamp
+            last_phase.total_insertions = sum(c.insertions for c in last_phase.commits)
+            last_phase.total_deletions = sum(c.deletions for c in last_phase.commits)
+            last_phase.loc_end = records[-1].loc_total
+            last_phase.loc_delta = last_phase.loc_end - last_phase.loc_start
+            if last_phase.loc_start > 0:
+                last_phase.loc_delta_percent = (last_phase.loc_delta / last_phase.loc_start) * 100
+
+            # Clear summary so it will be regenerated
+            last_phase.summary = None
+
+            phases = existing_phases
+            console.print(f"[green]Updated last phase (now {last_phase.commit_count} commits)[/green]\n")
+        else:
+            # Create new phases for new commits
+            new_phases = chunker.chunk(records, **kwargs)
+
+            # Renumber new phases to continue from existing
+            for phase in new_phases:
+                phase.phase_number = len(existing_phases) + phase.phase_number
+
+            phases = existing_phases + new_phases
+            console.print(f"[green]Created {len(new_phases)} new phases (total: {len(phases)})[/green]\n")
+    else:
+        # Full analysis: chunk normally
+        phases = chunker.chunk(records, **kwargs)
+        console.print(f"[green]Created {len(phases)} phases[/green]\n")
+
+    # Display phase overview
+    _display_phase_overview(phases)
+
+    # Save phases
+    phases_dir = Path(output) / "phases"
+    chunker.save_phases(phases, str(phases_dir))
+
+    if skip_llm:
+        console.print("\n[yellow]Skipping LLM summarization. Writing basic timeline...[/yellow]")
+        timeline_file = Path(output) / "timeline.md"
+        OutputWriter.write_simple_timeline(phases, str(timeline_file))
+        console.print(f"[green]Wrote timeline to {timeline_file}[/green]\n")
+        return
+
+    # Step 3: Summarize phases with LLM
+    console.print("[bold]Step 3: Summarizing phases with LLM...[/bold]")
+    summarizer = PhaseSummarizer(
+        backend=backend,
+        model=model,
+        api_key=api_key,
+        ollama_url=ollama_url
+    )
+
+    # Identify phases that need summarization (no summary)
+    phases_to_summarize = [p for p in phases if p.summary is None]
+
+    if previous_analysis and len(phases_to_summarize) < len(phases):
+        console.print(f"[cyan]Incremental mode: {len(phases_to_summarize)} phases need summarization "
+                     f"({len(phases) - len(phases_to_summarize)} already summarized)[/cyan]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console
+    ) as progress:
+        task = progress.add_task("Summarizing phases...", total=len(phases_to_summarize))
+
+        # Build previous summaries from all phases (including existing ones)
+        previous_summaries = []
+        for i, phase in enumerate(phases):
+            progress.update(task, description=f"Processing phase {i+1}/{len(phases)}...")
+
+            if phase.summary is None:
+                # Need to summarize this phase
+                context = summarizer._build_context(previous_summaries)
+                summary = summarizer.summarize_phase(phase, context)
+                phase.summary = summary
+                progress.update(task, advance=1)
+
+            previous_summaries.append({
+                'phase_number': phase.phase_number,
+                'summary': phase.summary,
+                'loc_delta': phase.loc_delta,
+            })
+
+            summarizer._save_phase_with_summary(phase, str(phases_dir))
+
+    if len(phases_to_summarize) > 0:
+        console.print(f"[green]Summarized {len(phases_to_summarize)} phase(s)[/green]\n")
+    else:
+        console.print(f"[green]All phases already summarized[/green]\n")
+
+    # Step 4: Generate global story
+    console.print("[bold]Step 4: Generating global narrative...[/bold]")
+    storyteller = StoryTeller(
+        backend=backend,
+        model=model,
+        api_key=api_key,
+        ollama_url=ollama_url
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console
+    ) as progress:
+        task = progress.add_task("Generating story...", total=None)
+        stories = storyteller.generate_global_story(phases, repo_name)
+        progress.update(task, completed=True)
+
+    console.print(f"[green]Generated global narrative[/green]\n")
+
+    # Step 5: Write output
+    console.print("[bold]Step 5: Writing output files...[/bold]")
+    output_path = Path(output)
+
+    # Write markdown report
+    markdown_path = output_path / "history_story.md"
+    OutputWriter.write_markdown(stories, phases, str(markdown_path), repo_name)
+    console.print(f"[green]Wrote {markdown_path}[/green]")
+
+    # Write JSON data with metadata for incremental analysis
+    json_path = output_path / "history_data.json"
+    OutputWriter.write_json(stories, phases, str(json_path), repo_path=repo_path)
+    console.print(f"[green]Wrote {json_path}[/green]")
+
+    # Write timeline
+    timeline_path = output_path / "timeline.md"
+    OutputWriter.write_simple_timeline(phases, str(timeline_path))
+    console.print(f"[green]Wrote {timeline_path}[/green]\n")
+
+    # Success summary
+    console.print("[bold green]Branch analysis complete![/bold green]\n")
+    console.print(f"Analyzed {len(records)} commits across {len(phases)} phases")
+    console.print(f"Output written to: {output_path.resolve()}\n")
+
+
 @cli.command(help=ANALYZE_HELP)
 @click.option('--repo', '-r', default=".",
               help="Repository: local path, GitHub shortcut (org/repo), or full URL")
@@ -196,7 +447,15 @@ INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
 @click.option('--max-commits', type=int,
               help="Maximum commits to analyze (default: all commits)")
 @click.option('--branch', default='HEAD',
-              help="Branch to analyze (default: HEAD/current branch)")
+              help="Branch to analyze (default: HEAD/current branch). Use --branches for multiple.")
+@click.option('--list-branches', is_flag=True,
+              help="List all available branches and exit")
+@click.option('--branches',
+              help="Analyze specific branches (comma-separated or patterns like 'feature/*')")
+@click.option('--all-branches', is_flag=True,
+              help="Analyze all branches (local and remote)")
+@click.option('--exclude-branches',
+              help="Exclude branches matching patterns (comma-separated)")
 @click.option('--backend', '-b', type=click.Choice(['anthropic', 'openai', 'ollama']),
               help="LLM backend: 'anthropic' (Claude), 'openai' (GPT), 'ollama' (local). "
                    "Auto-detected from env vars if not specified.")
@@ -222,9 +481,9 @@ INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
               help="Extract commits since this date (ISO format: YYYY-MM-DD)")
 @click.option('--keep-clone', is_flag=True,
               help="Keep temporary clone of remote repository (default: cleanup after analysis)")
-def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
-           model, api_key, ollama_url, repo_name, skip_llm, incremental,
-           since_commit, since_date, keep_clone):
+def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branches,
+           branches, all_branches, exclude_branches, backend, model, api_key, ollama_url,
+           repo_name, skip_llm, incremental, since_commit, since_date, keep_clone):
     """Analyze git repository and generate narrative history.
 
     This is the main command that runs the full pipeline:
@@ -272,6 +531,102 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
                 output = str(repo_handler.get_default_output_path())
                 console.print(f"[cyan]Output will be saved to:[/cyan] {output}\n")
 
+        # Initialize branch manager
+        branch_manager = BranchManager(str(repo_path))
+
+        # Handle --list-branches flag
+        if list_branches:
+            console.print("[bold]Available Branches:[/bold]\n")
+            all_branches = branch_manager.list_all_branches(include_remote=True)
+
+            local_branches = [b for b in all_branches if not b.is_remote]
+            remote_branches = [b for b in all_branches if b.is_remote]
+
+            if local_branches:
+                console.print("[cyan]Local Branches:[/cyan]")
+                for b in sorted(local_branches, key=lambda x: x.name):
+                    console.print(f"  - {b.name} ({b.commit_count:,} commits)")
+
+            if remote_branches:
+                console.print(f"\n[cyan]Remote Branches:[/cyan]")
+                for b in sorted(remote_branches, key=lambda x: x.name):
+                    console.print(f"  - {b.name} ({b.commit_count:,} commits)")
+
+            console.print(f"\n[green]Total: {len(all_branches)} branches[/green]")
+            return
+
+        # Determine which branches to analyze
+        branches_to_analyze = []
+
+        if all_branches:
+            # Analyze all branches
+            branches_to_analyze = branch_manager.list_all_branches(include_remote=True)
+            console.print(f"[cyan]Analyzing all branches:[/cyan] {len(branches_to_analyze)} branches")
+
+        elif branches:
+            # Analyze specific branches based on patterns
+            patterns = parse_branch_spec(branches)
+            all_available = branch_manager.list_all_branches(include_remote=True)
+            branches_to_analyze = branch_manager.filter_branches(all_available, include_patterns=patterns)
+
+            if not branches_to_analyze:
+                console.print(f"[red]Error: No branches match pattern(s): {branches}[/red]")
+                sys.exit(1)
+
+            console.print(f"[cyan]Analyzing {len(branches_to_analyze)} branch(es) matching '{branches}'[/cyan]")
+
+        else:
+            # Single branch mode (backward compatible)
+            branch_info = branch_manager.get_branch_by_name(branch)
+            if branch_info:
+                branches_to_analyze = [branch_info]
+            else:
+                # Fallback: treat as branch name even if not found
+                console.print(f"[yellow]Warning: Branch '{branch}' not found in branch list, proceeding anyway...[/yellow]")
+                branches_to_analyze = []  # Will use old single-branch logic
+
+        # Apply exclusion patterns
+        if exclude_branches and branches_to_analyze:
+            exclude_patterns = parse_branch_spec(exclude_branches)
+            before_count = len(branches_to_analyze)
+            branches_to_analyze = branch_manager.filter_branches(
+                branches_to_analyze,
+                exclude_patterns=exclude_patterns
+            )
+            excluded_count = before_count - len(branches_to_analyze)
+            if excluded_count > 0:
+                console.print(f"[yellow]Excluded {excluded_count} branch(es) matching exclusion patterns[/yellow]")
+
+        # Multi-branch mode
+        is_multi_branch = len(branches_to_analyze) > 1
+
+        if is_multi_branch:
+            # Show warning about costs and get confirmation for large analyses
+            stats = branch_manager.get_branch_statistics(branches_to_analyze)
+            total_commits = stats['total_commits']
+
+            console.print(f"\n[bold yellow]Multi-Branch Analysis[/bold yellow]")
+            console.print(f"  Branches: {len(branches_to_analyze)}")
+            console.print(f"  Estimated total commits: {total_commits:,}")
+
+            if not skip_llm:
+                # Rough estimate: ~1 phase per 50 commits, ~1 LLM call per phase
+                estimated_llm_calls = (total_commits // 50) * len(branches_to_analyze) + len(branches_to_analyze) * 5
+                console.print(f"  Estimated LLM calls: ~{estimated_llm_calls:,}")
+                console.print(f"\n[yellow]This will incur API costs. Use --skip-llm to avoid LLM costs.[/yellow]")
+
+            if total_commits > 10000 and not skip_llm:
+                console.print(f"\n[bold red]WARNING: Large analysis detected ({total_commits:,} commits)[/bold red]")
+                console.print("[red]This may take a long time and incur significant API costs.[/red]")
+                console.print("[yellow]Consider using --skip-llm or limiting branches.[/yellow]\n")
+
+                # Prompt for confirmation
+                if not click.confirm("Do you want to continue?", default=False):
+                    console.print("[yellow]Analysis cancelled.[/yellow]")
+                    return
+
+            console.print()
+
         console.print(f"[cyan]Repository:[/cyan] {repo_path}")
         console.print(f"[cyan]Output:[/cyan] {output}")
         console.print(f"[cyan]Strategy:[/cyan] {strategy}")
@@ -284,6 +639,56 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, backend,
             console.print(f"[cyan]Model:[/cyan] {router.model}\n")
         else:
             console.print("[yellow]Skipping LLM summarization[/yellow]\n")
+
+        # Multi-branch analysis mode
+        if is_multi_branch:
+            base_output_dir = Path(output)
+            analyzed_branches = []
+
+            for idx, branch_info in enumerate(branches_to_analyze, 1):
+                console.print(f"\n[bold cyan]═══ Analyzing Branch {idx}/{len(branches_to_analyze)}: {branch_info.name} ═══[/bold cyan]\n")
+
+                # Set branch-specific output directory
+                branch_output = base_output_dir / branch_info.sanitized_name
+                current_branch = branch_info.name
+
+                # Analyze this branch (call single-branch logic)
+                _analyze_single_branch(
+                    repo_path=str(repo_path),
+                    branch=current_branch,
+                    output=str(branch_output),
+                    repo_name=f"{repo_name} ({branch_info.short_name})",
+                    strategy=strategy,
+                    chunk_size=chunk_size,
+                    max_commits=max_commits,
+                    backend=backend,
+                    model=model,
+                    api_key=api_key,
+                    ollama_url=ollama_url,
+                    skip_llm=skip_llm,
+                    incremental=incremental,
+                    since_commit=since_commit,
+                    since_date=since_date
+                )
+
+                analyzed_branches.append(branch_info)
+
+            # Generate index report
+            console.print(f"\n[bold]Generating multi-branch index...[/bold]")
+            IndexWriter.write_branch_index(analyzed_branches, base_output_dir, repo_name)
+            IndexWriter.write_branch_metadata(analyzed_branches, base_output_dir)
+            IndexWriter.write_simple_branch_list(analyzed_branches, base_output_dir)
+
+            console.print(f"\n[bold green]Multi-branch analysis complete![/bold green]")
+            console.print(f"Analyzed {len(analyzed_branches)} branches")
+            console.print(f"Index report: {base_output_dir / 'index.md'}\n")
+            return
+
+        # Single-branch analysis (backward compatible)
+        # Use branch from branches_to_analyze if available, otherwise use original branch param
+        if branches_to_analyze:
+            branch = branches_to_analyze[0].name
+
         # Check for incremental analysis
         previous_analysis = None
         existing_phases = []
