@@ -19,9 +19,21 @@ Example run on this repository:
 
 ## Installation
 
-### Option 1: Install with pip (recommended)
+### Option 1: Install from PyPI (recommended)
 
-This creates a `gitview` command in your PATH:
+Install the published package directly from PyPI to add the `gitview` command to your PATH:
+
+```bash
+pip3 install gitview
+
+# Confirm the CLI is available
+gitview --version
+gitview --help
+```
+
+### Option 2: Install from source (editable)
+
+This installs directly from the repository in editable mode so local changes take effect immediately:
 
 ```bash
 # Clone the repository
@@ -38,7 +50,7 @@ gitview --help
 
 **How it works:** The `pip install -e .` command reads `pyproject.toml` and `setup.py`, which define an entry point that creates `/usr/local/bin/gitview` (or similar on Windows) that calls `gitview.cli:main`.
 
-### Option 2: Run directly from repo (no installation)
+### Option 3: Run directly from repo (no installation)
 
 Use the executable wrapper in `bin/`:
 
@@ -59,7 +71,7 @@ export PATH="$PWD/bin:$PATH"
 gitview analyze
 ```
 
-### Option 3: Run as Python module
+### Option 4: Run as Python module
 
 ```bash
 # Install dependencies
