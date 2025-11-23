@@ -200,7 +200,10 @@ def _analyze_single_branch(
     skip_llm: bool,
     incremental: bool,
     since_commit: Optional[str],
-    since_date: Optional[str]
+    since_date: Optional[str],
+    todo_content: Optional[str] = None,
+    critical_mode: bool = False,
+    directives: Optional[str] = None
 ):
     """Analyze a single branch (helper function for multi-branch support)."""
     from typing import Optional
@@ -346,7 +349,10 @@ def _analyze_single_branch(
         backend=backend,
         model=model,
         api_key=api_key,
-        ollama_url=ollama_url
+        ollama_url=ollama_url,
+        todo_content=todo_content,
+        critical_mode=critical_mode,
+        directives=directives
     )
 
     # Identify phases that need summarization (no summary)
@@ -394,7 +400,10 @@ def _analyze_single_branch(
         backend=backend,
         model=model,
         api_key=api_key,
-        ollama_url=ollama_url
+        ollama_url=ollama_url,
+        todo_content=todo_content,
+        critical_mode=critical_mode,
+        directives=directives
     )
 
     with Progress(
@@ -481,9 +490,18 @@ def _analyze_single_branch(
               help="Extract commits since this date (ISO format: YYYY-MM-DD)")
 @click.option('--keep-clone', is_flag=True,
               help="Keep temporary clone of remote repository (default: cleanup after analysis)")
+@click.option('--todo',
+              help="Path to todo/goals file for critical examination mode. "
+                   "Evaluates commits against objectives defined in this file.")
+@click.option('--critical', is_flag=True,
+              help="Enable critical examination mode: focus on gaps, issues, and goal alignment. "
+                   "Removes flowery achievement-focused language.")
+@click.option('--directives',
+              help="Additional plain text directives to inject into LLM prompts for custom analysis focus.")
 def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branches,
            branches, all_branches, exclude_branches, backend, model, api_key, ollama_url,
-           repo_name, skip_llm, incremental, since_commit, since_date, keep_clone):
+           repo_name, skip_llm, incremental, since_commit, since_date, keep_clone,
+           todo, critical, directives):
     """Analyze git repository and generate narrative history.
 
     This is the main command that runs the full pipeline:
@@ -494,6 +512,27 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
     5. Write output files
     """
     console.print("\n[bold blue]GitView - Repository History Analyzer[/bold blue]\n")
+
+    # Load todo/goals file for critical examination mode
+    todo_content = None
+    if todo:
+        todo_path = Path(todo)
+        if not todo_path.exists():
+            console.print(f"[red]Error: Todo file not found: {todo}[/red]")
+            sys.exit(1)
+
+        with open(todo_path, 'r') as f:
+            todo_content = f.read()
+
+        console.print(f"[cyan]Loaded goals from:[/cyan] {todo}")
+        if not critical:
+            console.print("[yellow]Note: --todo specified without --critical. Consider using --critical for goal-focused analysis.[/yellow]")
+        console.print()
+
+    # Validate critical mode
+    if critical and not todo and not directives:
+        console.print("[yellow]Warning: --critical mode enabled without --todo or --directives.[/yellow]")
+        console.print("[yellow]Critical mode works best with goals/directives to measure against.[/yellow]\n")
 
     # Handle remote repository detection and cloning
     repo_handler = RemoteRepoHandler(repo)
@@ -668,7 +707,10 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                     skip_llm=skip_llm,
                     incremental=incremental,
                     since_commit=since_commit,
-                    since_date=since_date
+                    since_date=since_date,
+                    todo_content=todo_content,
+                    critical_mode=critical,
+                    directives=directives
                 )
 
                 analyzed_branches.append(branch_info)
@@ -830,7 +872,10 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
             backend=backend,
             model=model,
             api_key=api_key,
-            ollama_url=ollama_url
+            ollama_url=ollama_url,
+            todo_content=todo_content,
+            critical_mode=critical,
+            directives=directives
         )
 
         # Identify phases that need summarization (no summary)
@@ -878,7 +923,10 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
             backend=backend,
             model=model,
             api_key=api_key,
-            ollama_url=ollama_url
+            ollama_url=ollama_url,
+            todo_content=todo_content,
+            critical_mode=critical,
+            directives=directives
         )
 
         with Progress(
