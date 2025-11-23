@@ -23,7 +23,7 @@ console = Console()
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.1.3")
 def cli():
     """GitView - Git history analyzer with LLM-powered narrative generation.
 
