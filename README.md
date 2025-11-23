@@ -11,11 +11,12 @@ Example run on this repository:
 
 ## Features
 
-- ** Comprehensive History Extraction**: Extracts commit metadata, LOC changes, language breakdown, README evolution, comment analysis, and more
-- ** Smart Chunking**: Automatically divides history into meaningful "phases" or "epochs" based on significant changes
-- ** LLM-Powered Summaries**: Uses Claude to generate narrative summaries for each phase
-- ** Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
-- ** Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
+- **Comprehensive History Extraction**: Extracts commit metadata, LOC changes, language breakdown, README evolution, comment analysis, and more
+- **Smart Chunking**: Automatically divides history into meaningful "phases" or "epochs" based on significant changes
+- **LLM-Powered Summaries**: Uses Claude to generate narrative summaries for each phase
+- **Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
+- **Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
+- **Critical Examination Mode**: Objective assessment focused on gaps, technical debt, and alignment with project goals (perfect for project leads)
 
 ## Installation
 
@@ -127,6 +128,9 @@ gitview analyze --backend openai
 # Using local Ollama (no API key needed)
 gitview analyze --backend ollama --model llama3
 
+# Critical examination mode (for project leads)
+gitview analyze --critical --todo GOALS.md
+
 # Skip LLM summarization (just extract and chunk)
 gitview analyze --skip-llm
 ```
@@ -153,6 +157,9 @@ Options:
   --ollama-url TEXT            Ollama API URL (default: http://localhost:11434)
   --repo-name TEXT             Repository name for output
   --skip-llm                   Skip LLM summarization (extract and chunk only)
+  --todo PATH                  Path to goals/todo file for critical examination mode
+  --critical                   Enable critical examination mode (focus on gaps and issues)
+  --directives TEXT            Additional plain text directives for LLM analysis
 ```
 
 ### Extract Only
@@ -170,6 +177,85 @@ Chunk an extracted JSONL file into phases:
 ```bash
 gitview chunk history.jsonl --output ./phases --strategy adaptive
 ```
+
+## Critical Examination Mode
+
+For project leads who need objective assessment rather than celebratory narratives, GitView offers a critical examination mode that focuses on gaps, technical debt, and alignment with project goals.
+
+### What Changes in Critical Mode?
+
+**Tone & Focus:**
+- Removes flowery, achievement-focused language
+- Emphasizes objective assessment over celebration
+- Focuses on gaps, issues, and misalignments
+- Identifies what's missing or incomplete
+
+**Analysis:**
+- Evaluates progress against stated objectives
+- Highlights incomplete features and technical debt
+- Questions architectural decisions objectively
+- Identifies delays and resource misalignment
+- Notes concerning patterns and risks
+
+### Usage
+
+**Basic Critical Mode:**
+```bash
+gitview analyze --critical
+```
+
+**With Project Goals/TODO File:**
+```bash
+# Create a goals file (e.g., GOALS.md)
+cat > GOALS.md <<EOF
+# Project Goals Q1 2025
+- Implement user authentication system
+- Add API rate limiting
+- Improve test coverage to 80%
+- Migrate from SQLite to PostgreSQL
+- Complete API documentation
+EOF
+
+# Analyze against goals
+gitview analyze --critical --todo GOALS.md
+```
+
+**With Custom Directives:**
+```bash
+# Add specific analysis focus
+gitview analyze --critical \
+  --todo GOALS.md \
+  --directives "Focus on security vulnerabilities and performance bottlenecks"
+```
+
+**Combined Example:**
+```bash
+# Critical assessment with all options
+gitview analyze \
+  --critical \
+  --todo PROJECT_ROADMAP.md \
+  --directives "Emphasize testing gaps and code quality issues" \
+  --output ./critical-review
+```
+
+### Output in Critical Mode
+
+The LLM will generate:
+
+1. **Critical Executive Summary** - Assesses progress against goals, identifies gaps and delays
+2. **Critical Timeline** - Highlights goal alignment/misalignment per phase
+3. **Critical Technical Assessment** - Identifies architectural flaws and technical debt
+4. **Critical Deletion Analysis** - Notes incomplete cleanup and lingering technical debt
+5. **Comprehensive Critical Assessment** - Full project review with actionable insights
+
+### When to Use Critical Mode
+
+- **Project Reviews**: Objective assessment of development progress
+- **Technical Audits**: Identify technical debt and architectural issues
+- **Goal Alignment**: Measure actual work against stated objectives
+- **Resource Planning**: Understand where effort was spent vs. planned
+- **Risk Assessment**: Identify concerning patterns and project risks
+- **Leadership Reports**: Provide factual assessment to stakeholders
 
 ## Chunking Strategies
 
@@ -301,6 +387,30 @@ gitview chunk history.jsonl --strategy adaptive --output ./adaptive-phases
 gitview chunk history.jsonl --strategy fixed --chunk-size 25 --output ./fixed-phases
 ```
 
+### Critical Project Assessment
+
+```bash
+# Create a goals file for your project
+cat > PROJECT_GOALS.md <<EOF
+# Q1 2025 Objectives
+- Complete user authentication with OAuth2
+- Implement API rate limiting (1000 req/hour)
+- Achieve 80% test coverage
+- Migrate database to PostgreSQL
+- Document all public APIs
+EOF
+
+# Run critical analysis
+gitview analyze \
+  --critical \
+  --todo PROJECT_GOALS.md \
+  --directives "Focus on security issues and incomplete features" \
+  --output ./project-review-q1
+
+# Review the critical assessment
+cat ./project-review-q1/history_story.md
+```
+
 ## Architecture
 
 ```
@@ -420,12 +530,21 @@ gitview analyze --backend openai --api-key "your-key"
 
 ## Use Cases
 
+### Standard Mode (Celebratory Narrative)
 - **Technical Documentation**: Automatically generate project history documentation
 - **Onboarding**: Help new developers understand codebase evolution
 - **Retrospectives**: Review what worked and what didn't
 - **Project Reports**: Create compelling narratives for stakeholders
 - **Code Archaeology**: Understand why code evolved the way it did
 - **Cleanup Planning**: Identify what to remove based on deletion history
+
+### Critical Examination Mode
+- **Project Leadership**: Objective assessment for project leads and managers
+- **Technical Audits**: Identify technical debt and architectural issues
+- **Goal Tracking**: Measure actual progress against roadmap objectives
+- **Resource Analysis**: Understand where development effort was spent
+- **Risk Management**: Identify concerning patterns and project risks
+- **Stakeholder Reports**: Provide factual, critical assessment to executives
 
 ## Contributing
 

@@ -182,6 +182,40 @@ INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
   - Massive API cost savings for ongoing monitoring
   - Much faster analysis (only processes new commits)
   - Perfect for CI/CD integration or periodic reviews
+
+\b
+CRITICAL EXAMINATION MODE (Project Leadership):
+
+  For project leads who need objective assessment rather than celebratory
+  narratives. Critical mode focuses on gaps, technical debt, and alignment
+  with project goals.
+
+  # Basic critical mode
+  gitview analyze --critical
+
+  # Critical mode with project goals/TODO file
+  gitview analyze --critical --todo PROJECT_GOALS.md
+
+  # Critical mode with custom analysis directives
+  gitview analyze --critical --directives "Focus on security vulnerabilities"
+
+  # Combined: goals + directives
+  gitview analyze --critical --todo ROADMAP.md \\
+    --directives "Emphasize testing gaps and code quality issues"
+
+  What changes in critical mode:
+  - Removes flowery, achievement-focused language
+  - Evaluates progress against stated objectives
+  - Identifies incomplete features and technical debt
+  - Questions architectural decisions objectively
+  - Highlights gaps, delays, and misalignments
+  - Focuses on what's missing or needs improvement
+
+  Use cases:
+  - Project reviews and technical audits
+  - Goal alignment and resource planning
+  - Risk assessment and leadership reports
+  - Stakeholder communication requiring objectivity
 """
 
 
