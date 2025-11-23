@@ -13,7 +13,8 @@ class PhaseSummarizer:
     """Summarize git history phases using LLM."""
 
     def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
-                 api_key: Optional[str] = None, **kwargs):
+                 api_key: Optional[str] = None, todo_content: Optional[str] = None,
+                 critical_mode: bool = False, directives: Optional[str] = None, **kwargs):
         """
         Initialize summarizer with LLM backend.
 
@@ -21,10 +22,16 @@ class PhaseSummarizer:
             backend: LLM backend ('anthropic', 'openai', 'ollama')
             model: Model identifier (uses backend defaults if not specified)
             api_key: API key for the backend (if required)
+            todo_content: Optional content from todo/goals file for critical examination
+            critical_mode: Enable critical examination mode (focus on gaps and issues)
+            directives: Additional directives to inject into prompts
             **kwargs: Additional backend parameters
         """
         self.router = LLMRouter(backend=backend, model=model, api_key=api_key, **kwargs)
         self.model = self.router.model
+        self.todo_content = todo_content
+        self.critical_mode = critical_mode
+        self.directives = directives
 
     def summarize_phase(self, phase: Phase, context: Optional[str] = None) -> str:
         """
@@ -164,7 +171,8 @@ class PhaseSummarizer:
     def _build_phase_prompt(self, phase_data: Dict[str, Any],
                            context: Optional[str] = None) -> str:
         """Build prompt for phase summarization."""
-        prompt = f"""You are analyzing a phase in a git repository's history. Your task is to write a concise narrative summary of what happened during this phase.
+        if self.critical_mode:
+            prompt = f"""You are conducting a critical examination of a phase in a git repository's history.
 
 **Phase Overview:**
 - Phase Number: {phase_data['phase_number']}
@@ -176,7 +184,37 @@ class PhaseSummarizer:
 - Total Changes: +{phase_data['total_insertions']:,} / -{phase_data['total_deletions']:,} lines
 - Authors: {', '.join(phase_data['authors'])}
 - Primary Author: {phase_data['primary_author']}
+"""
+        else:
+            prompt = f"""You are analyzing a phase in a git repository's history. Your task is to write a concise narrative summary of what happened during this phase.
 
+**Phase Overview:**
+- Phase Number: {phase_data['phase_number']}
+- Time Period: {phase_data['start_date']} to {phase_data['end_date']}
+- Commits: {phase_data['commit_count']}
+- LOC Change: {phase_data['loc_delta']:+,d} ({phase_data['loc_delta_percent']:+.1f}%)
+  - Start: {phase_data['loc_start']:,} LOC
+  - End: {phase_data['loc_end']:,} LOC
+- Total Changes: +{phase_data['total_insertions']:,} / -{phase_data['total_deletions']:,} lines
+- Authors: {', '.join(phase_data['authors'])}
+- Primary Author: {phase_data['primary_author']}
+"""
+
+        # Add goals/todo content if provided
+        if self.todo_content:
+            prompt += f"""
+**Project Goals and Objectives:**
+{self.todo_content}
+"""
+
+        # Add custom directives if provided
+        if self.directives:
+            prompt += f"""
+**Additional Analysis Directives:**
+{self.directives}
+"""
+
+        prompt += f"""
 **Language Breakdown:**
 - Start: {phase_data['languages_start']}
 - End: {phase_data['languages_end']}
@@ -203,7 +241,24 @@ class PhaseSummarizer:
         if context:
             prompt += f"\n**Context from Previous Phases:**\n{context}\n"
 
-        prompt += """
+        if self.critical_mode:
+            prompt += """
+**Your Task:**
+Write a critical assessment (3-5 paragraphs) that:
+
+1. Evaluates whether activities aligned with stated project goals
+2. Identifies incomplete features, missing implementations, or unaddressed TODOs
+3. Assesses code quality issues, technical debt incurred, or problematic patterns
+4. Questions the rationale behind large changes or refactorings
+5. Notes gaps between commit messages and actual progress
+6. Identifies what should have been done but wasn't
+7. Highlights risks or concerning trends
+
+Be objective and factual. Focus on gaps, issues, and misalignments rather than achievements.
+
+Write the critical assessment now:"""
+        else:
+            prompt += """
 **Your Task:**
 Write a concise narrative summary (3-5 paragraphs) that:
 

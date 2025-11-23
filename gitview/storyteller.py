@@ -13,7 +13,8 @@ class StoryTeller:
     """Generate global repository story from phase summaries."""
 
     def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
-                 api_key: Optional[str] = None, **kwargs):
+                 api_key: Optional[str] = None, todo_content: Optional[str] = None,
+                 critical_mode: bool = False, directives: Optional[str] = None, **kwargs):
         """
         Initialize storyteller with LLM backend.
 
@@ -21,10 +22,16 @@ class StoryTeller:
             backend: LLM backend ('anthropic', 'openai', 'ollama')
             model: Model identifier (uses backend defaults if not specified)
             api_key: API key for the backend (if required)
+            todo_content: Optional content from todo/goals file for critical examination
+            critical_mode: Enable critical examination mode (focus on gaps and issues)
+            directives: Additional directives to inject into prompts
             **kwargs: Additional backend parameters
         """
         self.router = LLMRouter(backend=backend, model=model, api_key=api_key, **kwargs)
         self.model = self.router.model
+        self.todo_content = todo_content
+        self.critical_mode = critical_mode
+        self.directives = directives
 
     def generate_global_story(self, phases: List[Phase],
                              repo_name: Optional[str] = None) -> Dict[str, str]:
@@ -168,7 +175,8 @@ class StoryTeller:
         for p in phase_summaries:
             all_authors.update(p['authors'])
 
-        prompt = f"""You are writing an executive summary of the evolution of {repo_title}.
+        if self.critical_mode:
+            prompt = f"""You are conducting a critical examination of {repo_title}'s evolution.
 
 **Overall Statistics:**
 - Total Phases: {len(phase_summaries)}
@@ -177,7 +185,34 @@ class StoryTeller:
 - Total Deletions: -{total_deletions:,} lines
 - Contributors: {len(all_authors)}
 - Time Span: {phase_summaries[0]['start_date']} to {phase_summaries[-1]['end_date']}
+"""
+        else:
+            prompt = f"""You are writing an executive summary of the evolution of {repo_title}.
 
+**Overall Statistics:**
+- Total Phases: {len(phase_summaries)}
+- Total Commits: {total_commits:,}
+- Total Insertions: +{total_insertions:,} lines
+- Total Deletions: -{total_deletions:,} lines
+- Contributors: {len(all_authors)}
+- Time Span: {phase_summaries[0]['start_date']} to {phase_summaries[-1]['end_date']}
+"""
+
+        # Add goals/todo content if provided
+        if self.todo_content:
+            prompt += f"""
+**Project Goals and Objectives:**
+{self.todo_content}
+"""
+
+        # Add custom directives if provided
+        if self.directives:
+            prompt += f"""
+**Additional Analysis Directives:**
+{self.directives}
+"""
+
+        prompt += """
 **Phase Summaries:**
 """
 
@@ -186,7 +221,21 @@ class StoryTeller:
             prompt += f"- LOC Δ: {p['loc_delta']:+,d} ({p['loc_delta_percent']:+.1f}%)\n"
             prompt += f"- Summary: {p['summary']}\n"
 
-        prompt += """
+        if self.critical_mode:
+            prompt += """
+**Your Task:**
+Write a critical executive summary (2-3 paragraphs) that:
+1. Objectively assesses progress against stated goals and objectives
+2. Identifies gaps, delays, or areas not addressed
+3. Highlights technical debt, incomplete features, or unresolved issues
+4. Evaluates whether development effort aligns with project priorities
+5. Notes any concerning patterns or risks
+
+Focus on factual assessment rather than celebration. Identify what's missing or incomplete.
+
+Write the critical executive summary now:"""
+        else:
+            prompt += """
 **Your Task:**
 Write a concise executive summary (2-3 paragraphs) that:
 1. Provides a high-level overview of the repository's evolution
@@ -205,8 +254,28 @@ Write the executive summary now:"""
         """Build prompt for timeline generation."""
         repo_title = repo_name or "Repository"
 
-        prompt = f"""Create a chronological timeline of {repo_title}'s evolution with clear headings for each phase.
+        if self.critical_mode:
+            prompt = f"""Create a critical timeline examining {repo_title}'s evolution with focus on progress against objectives.
+"""
+        else:
+            prompt = f"""Create a chronological timeline of {repo_title}'s evolution with clear headings for each phase.
+"""
 
+        # Add goals/todo content if provided
+        if self.todo_content:
+            prompt += f"""
+**Project Goals and Objectives:**
+{self.todo_content}
+"""
+
+        # Add custom directives if provided
+        if self.directives:
+            prompt += f"""
+**Additional Analysis Directives:**
+{self.directives}
+"""
+
+        prompt += """
 **Phase Summaries:**
 """
 
@@ -217,7 +286,22 @@ Write the executive summary now:"""
             prompt += f"- Authors: {', '.join(p['authors'])}\n"
             prompt += f"- Summary: {p['summary']}\n"
 
-        prompt += """
+        if self.critical_mode:
+            prompt += """
+**Your Task:**
+Create a critical timeline in markdown format with:
+1. A descriptive heading for each phase indicating goal alignment or gaps
+2. Date range
+3. Progress toward stated objectives
+4. Incomplete or missing features
+5. Technical issues or delays
+6. Divergence from expected priorities
+
+Focus on objective assessment of what was accomplished vs. what should have been done.
+
+Write the critical timeline now:"""
+        else:
+            prompt += """
 **Your Task:**
 Create a timeline in markdown format with:
 1. A descriptive heading for each phase (e.g., "Early Prototyping", "Major Refactoring", "Stabilization")
@@ -240,8 +324,28 @@ Write the timeline now:"""
         """Build prompt for technical evolution."""
         repo_title = repo_name or "this codebase"
 
-        prompt = f"""Analyze the technical and architectural evolution of {repo_title}.
+        if self.critical_mode:
+            prompt = f"""Critically analyze the technical and architectural evolution of {repo_title}.
+"""
+        else:
+            prompt = f"""Analyze the technical and architectural evolution of {repo_title}.
+"""
 
+        # Add goals/todo content if provided
+        if self.todo_content:
+            prompt += f"""
+**Project Goals and Objectives:**
+{self.todo_content}
+"""
+
+        # Add custom directives if provided
+        if self.directives:
+            prompt += f"""
+**Additional Analysis Directives:**
+{self.directives}
+"""
+
+        prompt += """
 **Phase Summaries:**
 """
 
@@ -249,7 +353,22 @@ Write the timeline now:"""
             prompt += f"\n**Phase {p['phase_number']}** ({p['start_date']} to {p['end_date']})\n"
             prompt += f"{p['summary']}\n"
 
-        prompt += """
+        if self.critical_mode:
+            prompt += """
+**Your Task:**
+Write a critical technical assessment that:
+1. Evaluates architectural decisions against best practices and project goals
+2. Identifies technical debt, design flaws, or suboptimal choices
+3. Assesses whether refactorings addressed root issues or just symptoms
+4. Questions technology choices and their necessity
+5. Notes missing architectural elements or incomplete implementations
+6. Identifies areas requiring future technical work
+
+Write from a technical lead's perspective conducting a code review. Be objective and identify issues.
+
+Write the critical technical assessment now:"""
+        else:
+            prompt += """
 **Your Task:**
 Write a technical retrospective that:
 1. Traces the architectural evolution across phases
@@ -270,8 +389,28 @@ Write the technical evolution now:"""
         # Find phases with significant deletions
         deletion_phases = [p for p in phase_summaries if p['has_large_deletion']]
 
-        prompt = f"""Tell the story of what was removed from the codebase and why.
+        if self.critical_mode:
+            prompt = f"""Analyze what was removed from the codebase, including what should have been removed but wasn't.
+"""
+        else:
+            prompt = f"""Tell the story of what was removed from the codebase and why.
+"""
 
+        # Add goals/todo content if provided
+        if self.todo_content:
+            prompt += f"""
+**Project Goals and Objectives:**
+{self.todo_content}
+"""
+
+        # Add custom directives if provided
+        if self.directives:
+            prompt += f"""
+**Additional Analysis Directives:**
+{self.directives}
+"""
+
+        prompt += """
 **All Phases:**
 """
 
@@ -281,7 +420,21 @@ Write the technical evolution now:"""
             prompt += f"- Large Deletion: {p['has_large_deletion']}\n"
             prompt += f"- Summary: {p['summary']}\n"
 
-        prompt += """
+        if self.critical_mode:
+            prompt += """
+**Your Task:**
+Write a critical analysis of code removal and cleanup:
+1. What was removed and was it sufficient?
+2. What obsolete code or technical debt remains unaddressed?
+3. Were deletions strategic or just reactive?
+4. What should have been removed but is still present?
+5. Did cleanup efforts align with project priorities?
+
+Focus on identifying incomplete cleanup and lingering technical debt.
+
+Write the critical deletion analysis now:"""
+        else:
+            prompt += """
 **Your Task:**
 Write a narrative about the deletion and cleanup efforts:
 1. What major components were removed?
@@ -300,8 +453,28 @@ Write the deletion story now:"""
         """Build prompt for full narrative."""
         repo_title = repo_name or "this repository"
 
-        prompt = f"""Write a comprehensive narrative of {repo_title}'s evolution.
+        if self.critical_mode:
+            prompt = f"""Write a comprehensive critical assessment of {repo_title}'s evolution.
+"""
+        else:
+            prompt = f"""Write a comprehensive narrative of {repo_title}'s evolution.
+"""
 
+        # Add goals/todo content if provided
+        if self.todo_content:
+            prompt += f"""
+**Project Goals and Objectives:**
+{self.todo_content}
+"""
+
+        # Add custom directives if provided
+        if self.directives:
+            prompt += f"""
+**Additional Analysis Directives:**
+{self.directives}
+"""
+
+        prompt += """
 **Phase Summaries:**
 """
 
@@ -311,7 +484,23 @@ Write the deletion story now:"""
             prompt += f"- Authors: {', '.join(p['authors'])}\n"
             prompt += f"{p['summary']}\n"
 
-        prompt += """
+        if self.critical_mode:
+            prompt += """
+**Your Task:**
+Write a comprehensive critical assessment (multiple paragraphs) that:
+1. Evaluates actual progress against stated objectives throughout the timeline
+2. Identifies recurring issues, delays, or patterns of misalignment
+3. Assesses resource allocation and whether effort matched priorities
+4. Highlights gaps in functionality, missing features, or incomplete implementations
+5. Questions strategic decisions and their long-term impact
+6. Provides specific, actionable insights on what needs improvement
+
+This should read like a thorough project review identifying both accomplishments and shortcomings.
+Do not use flowery or celebratory language. Be factual, direct, and focused on gaps.
+
+Write the critical assessment now:"""
+        else:
+            prompt += """
 **Your Task:**
 Write a complete, detailed narrative (multiple paragraphs) that:
 1. Tells the full story of the repository from beginning to end
