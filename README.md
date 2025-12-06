@@ -1,5 +1,11 @@
 # GitView
 
+[![Github-CI][github-ci]][github-link]
+[![Coverage Status][codecov-badge]][codecov-link]
+[![PyPI][pypi-badge]][pypi-link]
+[![PyPI - Downloads][install-badge]][install-link]
+
+
 **Git history analyzer with LLM-powered narrative generation**
 
 GitView extracts your repository's git history and uses AI to generate compelling narratives about how your codebase evolved. Instead of manually reading through thousands of commits, get a comprehensive story of your project's journey.
@@ -553,3 +559,14 @@ Contributions welcome! Please open an issue or submit a pull request.
 ## License
 
 MIT License - see LICENSE file for details
+
+
+
+[github-ci]: https://github.com/carstenbund/gitview/actions/workflows/tests.yml/badge.svg?branch=master
+[github-link]: https://github.com/carstenbund/gitview
+[pypi-badge]: https://img.shields.io/pypi/v/gitview.svg
+[pypi-link]: https://pypi.org/project/gitview
+[codecov-badge]: https://codecov.io/gh/carstenbund/gitview/branch/master/graph/badge.svg
+[codecov-link]: https://codecov.io/gh/carstenbund/gitview
+[install-badge]: https://img.shields.io/pypi/dw/gitview?label=pypi%20installs
+[install-link]: https://pypistats.org/packages/gitview
