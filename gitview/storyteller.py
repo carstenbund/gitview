@@ -14,7 +14,8 @@ class StoryTeller:
 
     def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
                  api_key: Optional[str] = None, todo_content: Optional[str] = None,
-                 critical_mode: bool = False, directives: Optional[str] = None, **kwargs):
+                 critical_mode: bool = False, directives: Optional[str] = None,
+                 max_phases_per_prompt: int = 12, **kwargs):
         """
         Initialize storyteller with LLM backend.
 
@@ -32,6 +33,9 @@ class StoryTeller:
         self.todo_content = self._truncate_content(todo_content, 2000)
         self.critical_mode = critical_mode
         self.directives = self._truncate_content(directives, 2000)
+        # Limit how many phases are fed to the model in a single request to avoid
+        # context blowups on very large histories.
+        self.max_phases_per_prompt = max_phases_per_prompt
 
     def generate_global_story(self, phases: List[Phase],
                              repo_name: Optional[str] = None) -> Dict[str, str]:
@@ -87,6 +91,45 @@ class StoryTeller:
 
         return stories
 
+    def _generate_section_with_batches(
+        self,
+        section_name: str,
+        phase_summaries: List[Dict[str, Any]],
+        repo_name: Optional[str],
+        build_prompt_fn,
+        initial_max_tokens: int,
+    ) -> str:
+        """Generate a section, batching phases to respect context limits."""
+
+        if len(phase_summaries) <= self.max_phases_per_prompt:
+            prompt = build_prompt_fn(phase_summaries, repo_name)
+            messages = [LLMMessage(role="user", content=prompt)]
+            response = self._generate_with_context_guard(
+                messages, initial_max_tokens=initial_max_tokens
+            )
+            return response.content.strip()
+
+        # Fall back to batching: summarize slices of phases then merge.
+        batch_outputs: List[str] = []
+        for batch in self._chunk_phase_summaries(phase_summaries):
+            prompt = build_prompt_fn(batch, repo_name)
+            messages = [LLMMessage(role="user", content=prompt)]
+            response = self._generate_with_context_guard(
+                messages, initial_max_tokens=initial_max_tokens
+            )
+            batch_outputs.append(self._truncate_content(response.content.strip(), 2500))
+
+        synthesis_prompt = self._build_synthesis_prompt(
+            section_name=section_name,
+            batch_outputs=batch_outputs,
+            repo_name=repo_name,
+        )
+        synthesis_messages = [LLMMessage(role="user", content=synthesis_prompt)]
+        synthesis_response = self._generate_with_context_guard(
+            synthesis_messages, initial_max_tokens=initial_max_tokens
+        )
+        return synthesis_response.content.strip()
+
     def _prepare_phase_summaries(self, phases: List[Phase]) -> List[Dict[str, Any]]:
         """Prepare phase summaries for LLM prompts."""
         summaries = []
@@ -135,6 +178,61 @@ class StoryTeller:
 
         return summaries
 
+    def _chunk_phase_summaries(
+        self, phase_summaries: List[Dict[str, Any]]
+    ) -> List[List[Dict[str, Any]]]:
+        """Chunk phase summaries into batches to avoid oversized prompts."""
+
+        batches: List[List[Dict[str, Any]]] = []
+        for i in range(0, len(phase_summaries), self.max_phases_per_prompt):
+            batches.append(phase_summaries[i : i + self.max_phases_per_prompt])
+        return batches
+
+    def _build_synthesis_prompt(
+        self, section_name: str, batch_outputs: List[str], repo_name: Optional[str]
+    ) -> str:
+        """Merge multiple partial outputs into a single coherent section."""
+
+        repo_title = repo_name or "this repository"
+        prompt = (
+            f"You received {len(batch_outputs)} partial drafts of the {section_name} "
+            f"for {repo_title}. Combine them into a single cohesive {section_name} "
+            "that preserves chronology, avoids repetition, and keeps the tone/" \
+            "structure requested in the originals."
+        )
+
+        for idx, output in enumerate(batch_outputs, 1):
+            prompt += f"\n\n### Partial {section_name.title()} {idx}\n{output}"
+
+        prompt += "\n\nWrite the merged version now:"
+        return prompt
+
+    def _generate_with_context_guard(
+        self, messages: List[LLMMessage], initial_max_tokens: int
+    ):
+        """Generate while gracefully handling context window errors."""
+
+        max_tokens = initial_max_tokens
+        min_tokens = 400
+
+        while True:
+            try:
+                return self.router.generate(messages, max_tokens=max_tokens)
+            except Exception as exc:
+                error_message = str(exc).lower()
+                if "context" not in error_message:
+                    raise
+
+                if max_tokens <= min_tokens:
+                    raise
+
+                next_max_tokens = max(min_tokens, int(max_tokens * 0.7))
+                print(
+                    "Encountered context window limit; "
+                    f"retrying with max_tokens={next_max_tokens}"
+                )
+                max_tokens = next_max_tokens
+
     @staticmethod
     def _truncate_content(content: Optional[str], max_chars: int) -> Optional[str]:
         """Ensure arbitrary content does not exceed the model context.
@@ -158,52 +256,57 @@ class StoryTeller:
     def _generate_executive_summary(self, phase_summaries: List[Dict[str, Any]],
                                    repo_name: Optional[str] = None) -> str:
         """Generate high-level executive summary."""
-        prompt = self._build_executive_summary_prompt(phase_summaries, repo_name)
-
-        messages = [LLMMessage(role="user", content=prompt)]
-        response = self.router.generate(messages, max_tokens=1500)
-
-        return response.content.strip()
+        return self._generate_section_with_batches(
+            section_name="executive summary",
+            phase_summaries=phase_summaries,
+            repo_name=repo_name,
+            build_prompt_fn=self._build_executive_summary_prompt,
+            initial_max_tokens=1500,
+        )
 
     def _generate_timeline(self, phase_summaries: List[Dict[str, Any]],
                           repo_name: Optional[str] = None) -> str:
         """Generate chronological timeline."""
-        prompt = self._build_timeline_prompt(phase_summaries, repo_name)
-
-        messages = [LLMMessage(role="user", content=prompt)]
-        response = self.router.generate(messages, max_tokens=3000)
-
-        return response.content.strip()
+        return self._generate_section_with_batches(
+            section_name="timeline",
+            phase_summaries=phase_summaries,
+            repo_name=repo_name,
+            build_prompt_fn=self._build_timeline_prompt,
+            initial_max_tokens=3000,
+        )
 
     def _generate_technical_evolution(self, phase_summaries: List[Dict[str, Any]],
                                      repo_name: Optional[str] = None) -> str:
         """Generate technical architecture evolution story."""
-        prompt = self._build_technical_evolution_prompt(phase_summaries, repo_name)
-
-        messages = [LLMMessage(role="user", content=prompt)]
-        response = self.router.generate(messages, max_tokens=3000)
-
-        return response.content.strip()
+        return self._generate_section_with_batches(
+            section_name="technical evolution",
+            phase_summaries=phase_summaries,
+            repo_name=repo_name,
+            build_prompt_fn=self._build_technical_evolution_prompt,
+            initial_max_tokens=3000,
+        )
 
     def _generate_deletion_story(self, phase_summaries: List[Dict[str, Any]],
                                 repo_name: Optional[str] = None) -> str:
         """Generate story of code deletions and cleanups."""
-        prompt = self._build_deletion_story_prompt(phase_summaries, repo_name)
-
-        messages = [LLMMessage(role="user", content=prompt)]
-        response = self.router.generate(messages, max_tokens=2000)
-
-        return response.content.strip()
+        return self._generate_section_with_batches(
+            section_name="deletion story",
+            phase_summaries=phase_summaries,
+            repo_name=repo_name,
+            build_prompt_fn=self._build_deletion_story_prompt,
+            initial_max_tokens=2000,
+        )
 
     def _generate_full_narrative(self, phase_summaries: List[Dict[str, Any]],
                                 repo_name: Optional[str] = None) -> str:
         """Generate complete detailed narrative."""
-        prompt = self._build_full_narrative_prompt(phase_summaries, repo_name)
-
-        messages = [LLMMessage(role="user", content=prompt)]
-        response = self.router.generate(messages, max_tokens=4000)
-
-        return response.content.strip()
+        return self._generate_section_with_batches(
+            section_name="full narrative",
+            phase_summaries=phase_summaries,
+            repo_name=repo_name,
+            build_prompt_fn=self._build_full_narrative_prompt,
+            initial_max_tokens=4000,
+        )
 
     def _build_executive_summary_prompt(self, phase_summaries: List[Dict[str, Any]],
                                        repo_name: Optional[str]) -> str:
