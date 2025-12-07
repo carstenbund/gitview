@@ -18,6 +18,7 @@ Example run on this repository:
 ## Features
 
 - **Comprehensive History Extraction**: Extracts commit metadata, LOC changes, language breakdown, README evolution, comment analysis, and more
+- **GitHub PR/Review Enrichment**: Optionally enrich commits with Pull Request context, review comments, and collaboration data via GitHub's GraphQL API
 - **Smart Chunking**: Automatically divides history into meaningful "phases" or "epochs" based on significant changes
 - **LLM-Powered Summaries**: Uses Claude to generate narrative summaries for each phase
 - **Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
@@ -134,6 +135,10 @@ gitview analyze --backend openai
 # Using local Ollama (no API key needed)
 gitview analyze --backend ollama --model llama3
 
+# With GitHub PR/review enrichment (richer narratives!)
+export GITHUB_TOKEN="ghp_your_token_here"
+gitview analyze --repo owner/repo --github-token $GITHUB_TOKEN
+
 # Critical examination mode (for project leads)
 gitview analyze --critical --todo GOALS.md
 
@@ -166,6 +171,7 @@ Options:
   --todo PATH                  Path to goals/todo file for critical examination mode
   --critical                   Enable critical examination mode (focus on gaps and issues)
   --directives TEXT            Additional plain text directives for LLM analysis
+  --github-token TEXT          GitHub token for PR/review enrichment (or GITHUB_TOKEN env var)
 ```
 
 ### Extract Only
@@ -262,6 +268,75 @@ The LLM will generate:
 - **Resource Planning**: Understand where effort was spent vs. planned
 - **Risk Assessment**: Identify concerning patterns and project risks
 - **Leadership Reports**: Provide factual assessment to stakeholders
+
+## GitHub Enrichment (PR & Review Context)
+
+GitView can enrich commit history with Pull Request context from GitHub's GraphQL API, providing richer narratives based on actual PR descriptions and review feedback rather than just commit messages.
+
+### What GitHub Enrichment Provides
+
+- **PR Titles & Descriptions**: Use the "why" from PR descriptions instead of terse commit messages
+- **Review Comments**: Include reviewer feedback and discussion context
+- **Reviewer Attribution**: Track who reviewed and approved changes
+- **PR Labels**: Categorize work by type (feature, bug, refactor, etc.)
+- **Branch Information**: Understand feature branch to main branch flow
+
+### Getting Started
+
+1. **Generate a GitHub Token**:
+   - Go to https://github.com/settings/tokens
+   - Create "Personal access token (classic)"
+   - Select `repo` scope for private repos (or `public_repo` for public only)
+   - Copy the token
+
+2. **Use with GitView**:
+
+```bash
+# Set as environment variable
+export GITHUB_TOKEN="ghp_your_token_here"
+gitview analyze --repo owner/repo --github-token $GITHUB_TOKEN
+
+# Or pass directly
+gitview analyze --repo owner/repo --github-token "ghp_your_token_here"
+```
+
+### Example with GitHub Enrichment
+
+```bash
+# Analyze a GitHub repository with PR context
+export GITHUB_TOKEN="ghp_..."
+gitview analyze \
+  --repo carstenbund/gitview \
+  --github-token $GITHUB_TOKEN \
+  --output ./enriched-analysis
+
+# The resulting narratives will include:
+# - PR descriptions explaining WHY changes were made
+# - Review feedback providing context on design decisions
+# - Labels helping categorize types of work
+```
+
+### How It Improves Narratives
+
+**Without GitHub Enrichment:**
+> "Commit abc123: Fix bug in login flow"
+
+**With GitHub Enrichment:**
+> "PR #42 'Fix authentication race condition' addressed a critical issue where users could be logged out during token refresh. The fix was reviewed by @alice who suggested the retry mechanism that was ultimately implemented. Labels: [bug, security, priority-high]"
+
+### Caching
+
+GitHub API responses are cached locally in `~/.gitview/cache/github` for 24 hours to:
+- Reduce API calls on repeated runs
+- Improve performance for large repositories
+- Stay within GitHub's rate limits
+
+### Rate Limits
+
+GitHub GraphQL API has a points-based rate limit (5,000 points/hour). GitView:
+- Uses efficient batched queries
+- Caches responses to minimize API calls
+- Gracefully falls back if rate limited
 
 ## Chunking Strategies
 

@@ -92,7 +92,7 @@ class StoryTeller:
         summaries = []
 
         for phase in phases:
-            summaries.append({
+            phase_data = {
                 'phase_number': phase.phase_number,
                 'start_date': phase.start_date[:10],
                 'end_date': phase.end_date[:10],
@@ -108,7 +108,28 @@ class StoryTeller:
                 'has_refactor': phase.has_refactor,
                 'readme_changed': phase.readme_changed,
                 'summary': phase.summary,
-            })
+            }
+
+            # Check for GitHub enrichment and collect key PR data
+            has_github_data = any(c.has_github_context() for c in phase.commits)
+            phase_data['has_github_data'] = has_github_data
+
+            if has_github_data:
+                # Collect unique PR labels for the phase
+                all_labels = set()
+                pr_count = 0
+                reviewers = set()
+                for commit in phase.commits:
+                    if commit.has_github_context():
+                        pr_count += 1
+                        all_labels.update(commit.get_pr_labels())
+                        reviewers.update(commit.get_reviewers())
+
+                phase_data['pr_count'] = pr_count
+                phase_data['pr_labels'] = list(all_labels)
+                phase_data['reviewers'] = list(reviewers)
+
+            summaries.append(phase_data)
 
         return summaries
 
@@ -216,10 +237,25 @@ class StoryTeller:
 **Phase Summaries:**
 """
 
+        # Check if any phase has GitHub data
+        has_any_github_data = any(p.get('has_github_data') for p in phase_summaries)
+
         for p in phase_summaries:
             prompt += f"\n**Phase {p['phase_number']} ({p['start_date']} to {p['end_date']})**\n"
             prompt += f"- LOC D: {p['loc_delta']:+,d} ({p['loc_delta_percent']:+.1f}%)\n"
+            # Add GitHub context if available
+            if p.get('has_github_data'):
+                if p.get('pr_labels'):
+                    prompt += f"- PR Labels: {', '.join(p['pr_labels'])}\n"
+                if p.get('reviewers'):
+                    prompt += f"- Reviewers: {', '.join(p['reviewers'][:5])}\n"  # Limit reviewers
             prompt += f"- Summary: {p['summary']}\n"
+
+        if has_any_github_data:
+            prompt += """
+**Note:** This analysis includes GitHub PR context (labels, reviewers, descriptions).
+Use this information to provide richer insights about team collaboration and work categorization.
+"""
 
         if self.critical_mode:
             prompt += """

@@ -18,6 +18,7 @@ from .writer import OutputWriter
 from .remote import RemoteRepoHandler
 from .branches import BranchManager, parse_branch_spec
 from .index_writer import IndexWriter
+from .github_enricher import GitHubEnricher, enrich_commits_with_github
 
 console = Console()
 
@@ -55,10 +56,11 @@ ANALYZE_HELP = """Analyze git repository and generate narrative history.
 \b
 This command runs the full pipeline:
   1. Extract git history with detailed metadata
-  2. Chunk commits into meaningful phases/epochs
-  3. Summarize each phase using LLM
-  4. Generate global narrative stories
-  5. Write markdown reports and JSON data
+  2. Enrich with GitHub PR/review context (optional, with --github-token)
+  3. Chunk commits into meaningful phases/epochs
+  4. Summarize each phase using LLM
+  5. Generate global narrative stories
+  6. Write markdown reports and JSON data
 
 \b
 REPOSITORY SOURCES:
@@ -216,6 +218,41 @@ CRITICAL EXAMINATION MODE (Project Leadership):
   - Goal alignment and resource planning
   - Risk assessment and leadership reports
   - Stakeholder communication requiring objectivity
+
+\b
+GITHUB ENRICHMENT (PR & Review Context):
+
+  Enhance narratives with Pull Request context, review comments, and
+  collaboration data from GitHub's GraphQL API.
+
+  # Basic usage with GitHub token
+  export GITHUB_TOKEN="ghp_..."
+  gitview analyze --repo org/repo --github-token $GITHUB_TOKEN
+
+  # Or inline
+  gitview analyze --repo org/repo --github-token "ghp_..."
+
+  What GitHub enrichment provides:
+  - PR titles and descriptions for context
+  - Review comments and feedback
+  - Reviewer attribution
+  - PR labels for categorization
+  - Merge/branch information
+
+  How to get a GitHub token:
+  1. Go to https://github.com/settings/tokens
+  2. Generate new token (classic)
+  3. Select 'repo' scope for private repos (or 'public_repo' for public only)
+  4. Copy the token and use with --github-token
+
+  Benefits:
+  - Stories use PR descriptions instead of just commit messages
+  - Review feedback provides context on why changes were made
+  - Better understanding of team collaboration patterns
+  - Labels help categorize types of changes
+
+  Note: Results are cached locally (~/.gitview/cache/github) for 24 hours
+  to reduce API calls and improve performance on repeated runs.
 """
 
 
@@ -237,7 +274,9 @@ def _analyze_single_branch(
     since_date: Optional[str],
     todo_content: Optional[str] = None,
     critical_mode: bool = False,
-    directives: Optional[str] = None
+    directives: Optional[str] = None,
+    github_token: Optional[str] = None,
+    github_repo_url: Optional[str] = None
 ):
     """Analyze a single branch (helper function for multi-branch support)."""
     from typing import Optional
@@ -312,6 +351,45 @@ def _analyze_single_branch(
     # Save raw history
     history_file = Path(output) / "repo_history.jsonl"
     extractor.save_to_jsonl(records, str(history_file))
+
+    # Step 1.5: Enrich with GitHub context (if token provided)
+    if github_token and github_repo_url and records:
+        console.print("[bold]Step 1.5: Enriching with GitHub context...[/bold]")
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                task = progress.add_task("Fetching GitHub PR/review data...", total=None)
+
+                # Enrich commits with GitHub context
+                github_contexts = enrich_commits_with_github(
+                    commits=records,
+                    github_token=github_token,
+                    repo_url=github_repo_url,
+                    branch=branch,
+                )
+
+                # Attach GitHub context to commit records
+                enriched_count = 0
+                for record in records:
+                    if record.commit_hash in github_contexts:
+                        ctx = github_contexts[record.commit_hash]
+                        record.github_context = ctx.to_dict()
+                        if ctx.pr_number:
+                            enriched_count += 1
+
+                progress.update(task, completed=True)
+
+            console.print(f"[green]Enriched {enriched_count} commits with GitHub PR context[/green]\n")
+
+            # Re-save with GitHub context
+            extractor.save_to_jsonl(records, str(history_file))
+
+        except Exception as e:
+            console.print(f"[yellow]Warning: GitHub enrichment failed: {e}[/yellow]")
+            console.print("[yellow]Continuing without GitHub context...[/yellow]\n")
 
     # Step 2: Chunk into phases
     console.print("[bold]Step 2: Chunking into phases...[/bold]")
@@ -532,10 +610,14 @@ def _analyze_single_branch(
                    "Removes flowery achievement-focused language.")
 @click.option('--directives',
               help="Additional plain text directives to inject into LLM prompts for custom analysis focus.")
+@click.option('--github-token',
+              envvar='GITHUB_TOKEN',
+              help="GitHub Personal Access Token for enriching commits with PR/review context. "
+                   "Can also be set via GITHUB_TOKEN environment variable.")
 def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branches,
            branches, all_branches, exclude_branches, backend, model, api_key, ollama_url,
            repo_name, skip_llm, incremental, since_commit, since_date, keep_clone,
-           todo, critical, directives):
+           todo, critical, directives, github_token):
     """Analyze git repository and generate narrative history.
 
     This is the main command that runs the full pipeline:
@@ -725,6 +807,27 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                 branch_output = base_output_dir / branch_info.sanitized_name
                 current_branch = branch_info.name
 
+                # Determine GitHub repo URL for enrichment
+                github_repo_url = None
+                if github_token:
+                    if not repo_handler.is_local and repo_handler.repo_info:
+                        github_repo_url = f"{repo_handler.repo_info.owner}/{repo_handler.repo_info.repo}"
+                    elif repo_handler.is_local:
+                        try:
+                            from git import Repo as GitRepo
+                            git_repo = GitRepo(str(repo_path))
+                            for remote in git_repo.remotes:
+                                for url in remote.urls:
+                                    if 'github.com' in url:
+                                        from .github_graphql import parse_github_url
+                                        owner, repo_n = parse_github_url(url)
+                                        github_repo_url = f"{owner}/{repo_n}"
+                                        break
+                                if github_repo_url:
+                                    break
+                        except Exception:
+                            pass
+
                 # Analyze this branch (call single-branch logic)
                 _analyze_single_branch(
                     repo_path=str(repo_path),
@@ -744,7 +847,9 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                     since_date=since_date,
                     todo_content=todo_content,
                     critical_mode=critical,
-                    directives=directives
+                    directives=directives,
+                    github_token=github_token,
+                    github_repo_url=github_repo_url
                 )
 
                 analyzed_branches.append(branch_info)
@@ -835,6 +940,71 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
         # Save raw history
         history_file = Path(output) / "repo_history.jsonl"
         extractor.save_to_jsonl(records, str(history_file))
+
+        # Step 1.5: Enrich with GitHub context (if token provided)
+        if github_token and records:
+            console.print("[bold]Step 1.5: Enriching with GitHub context...[/bold]")
+
+            # Determine repo URL for GitHub API
+            github_repo_url = None
+            if not repo_handler.is_local and repo_handler.repo_info:
+                github_repo_url = f"{repo_handler.repo_info.owner}/{repo_handler.repo_info.repo}"
+            elif repo_handler.is_local:
+                # Try to detect GitHub remote from local repo
+                try:
+                    from git import Repo as GitRepo
+                    git_repo = GitRepo(str(repo_path))
+                    for remote in git_repo.remotes:
+                        for url in remote.urls:
+                            if 'github.com' in url:
+                                from .github_graphql import parse_github_url
+                                owner, repo_n = parse_github_url(url)
+                                github_repo_url = f"{owner}/{repo_n}"
+                                break
+                        if github_repo_url:
+                            break
+                except Exception:
+                    pass
+
+            if github_repo_url:
+                try:
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        console=console
+                    ) as progress:
+                        task = progress.add_task("Fetching GitHub PR/review data...", total=None)
+
+                        # Enrich commits with GitHub context
+                        github_contexts = enrich_commits_with_github(
+                            commits=records,
+                            github_token=github_token,
+                            repo_url=github_repo_url,
+                            branch=branch,
+                        )
+
+                        # Attach GitHub context to commit records
+                        enriched_count = 0
+                        for record in records:
+                            if record.commit_hash in github_contexts:
+                                ctx = github_contexts[record.commit_hash]
+                                record.github_context = ctx.to_dict()
+                                if ctx.pr_number:
+                                    enriched_count += 1
+
+                        progress.update(task, completed=True)
+
+                    console.print(f"[green]Enriched {enriched_count} commits with GitHub PR context[/green]\n")
+
+                    # Re-save with GitHub context
+                    extractor.save_to_jsonl(records, str(history_file))
+
+                except Exception as e:
+                    console.print(f"[yellow]Warning: GitHub enrichment failed: {e}[/yellow]")
+                    console.print("[yellow]Continuing without GitHub context...[/yellow]\n")
+            else:
+                console.print("[yellow]Warning: Could not determine GitHub repository URL[/yellow]")
+                console.print("[yellow]GitHub enrichment requires a GitHub-hosted repository[/yellow]\n")
 
         # Step 2: Chunk into phases
         console.print("[bold]Step 2: Chunking into phases...[/bold]")

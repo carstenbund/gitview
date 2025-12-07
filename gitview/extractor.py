@@ -53,9 +53,46 @@ class CommitRecord:
     is_large_addition: bool
     is_refactor: bool
 
+    # GitHub context (populated when --github-token is used)
+    github_context: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
+
+    def has_github_context(self) -> bool:
+        """Check if this commit has GitHub context data."""
+        return self.github_context is not None and bool(self.github_context.get('pr_number'))
+
+    def get_pr_title(self) -> Optional[str]:
+        """Get PR title if available."""
+        if self.github_context:
+            return self.github_context.get('pr_title')
+        return None
+
+    def get_pr_body(self) -> Optional[str]:
+        """Get PR body/description if available."""
+        if self.github_context:
+            return self.github_context.get('pr_body')
+        return None
+
+    def get_review_comments(self) -> List[str]:
+        """Get review comments if available."""
+        if self.github_context:
+            return self.github_context.get('review_comments', [])
+        return []
+
+    def get_pr_labels(self) -> List[str]:
+        """Get PR labels if available."""
+        if self.github_context:
+            return self.github_context.get('pr_labels', [])
+        return []
+
+    def get_reviewers(self) -> List[str]:
+        """Get PR reviewers if available."""
+        if self.github_context:
+            return self.github_context.get('pr_reviewers', [])
+        return []
 
 
 class GitHistoryExtractor:
