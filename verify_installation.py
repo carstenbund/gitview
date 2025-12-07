@@ -17,8 +17,9 @@ def check_module(module_name):
 def check_command(command):
     """Check if a command exists."""
     try:
+        # Use python -m for cross-platform compatibility
         result = subprocess.run(
-            [command, '--version'],
+            [sys.executable, '-m', 'gitview.cli', '--version'],
             capture_output=True,
             text=True,
             timeout=5
@@ -65,9 +66,9 @@ def main():
     if check_command('gitview'):
         print("  ✓ gitview command available")
 
-        # Get version
+        # Get version using python -m for cross-platform compatibility
         result = subprocess.run(
-            ['gitview', '--version'],
+            [sys.executable, '-m', 'gitview.cli', '--version'],
             capture_output=True,
             text=True
         )
