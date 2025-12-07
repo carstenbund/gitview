@@ -107,7 +107,9 @@ class StoryTeller:
                 'has_large_addition': phase.has_large_addition,
                 'has_refactor': phase.has_refactor,
                 'readme_changed': phase.readme_changed,
-                'summary': self._truncate_content(phase.summary, 800),
+                # Keep summaries short to stay within model context limits when
+                # processing many phases or generating longer completions.
+                'summary': self._truncate_content(phase.summary, 400),
             }
 
             # Check for GitHub enrichment and collect key PR data
