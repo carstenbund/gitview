@@ -98,7 +98,7 @@ class PhaseSummarizer:
         # Get commit details
         commits_summary = []
         for commit in phase.commits[:20]:  # Limit to first 20 commits
-            commits_summary.append({
+            commit_data = {
                 'hash': commit.short_hash,
                 'date': commit.timestamp[:10],  # Just the date
                 'author': commit.author,
@@ -109,13 +109,31 @@ class PhaseSummarizer:
                 'is_refactor': commit.is_refactor,
                 'is_large_deletion': commit.is_large_deletion,
                 'is_large_addition': commit.is_large_addition,
-            })
+            }
+            # Add GitHub context if available
+            if commit.has_github_context():
+                pr_title = commit.get_pr_title()
+                pr_body = commit.get_pr_body()
+                pr_labels = commit.get_pr_labels()
+                reviewers = commit.get_reviewers()
+
+                if pr_title:
+                    commit_data['pr_title'] = pr_title
+                if pr_body:
+                    # Truncate PR body to first 300 chars
+                    commit_data['pr_description'] = pr_body[:300] + ('...' if len(pr_body) > 300 else '')
+                if pr_labels:
+                    commit_data['labels'] = pr_labels
+                if reviewers:
+                    commit_data['reviewers'] = reviewers
+
+            commits_summary.append(commit_data)
 
         # Get significant commits (large changes, refactors)
         significant_commits = []
         for commit in phase.commits:
             if commit.is_large_deletion or commit.is_large_addition or commit.is_refactor:
-                significant_commits.append({
+                sig_commit = {
                     'hash': commit.short_hash,
                     'message': commit.commit_message,
                     'insertions': commit.insertions,
@@ -123,7 +141,41 @@ class PhaseSummarizer:
                     'is_refactor': commit.is_refactor,
                     'is_large_deletion': commit.is_large_deletion,
                     'is_large_addition': commit.is_large_addition,
-                })
+                }
+                # Add PR context for significant commits
+                if commit.has_github_context():
+                    pr_title = commit.get_pr_title()
+                    pr_body = commit.get_pr_body()
+                    if pr_title:
+                        sig_commit['pr_title'] = pr_title
+                    if pr_body:
+                        sig_commit['pr_description'] = pr_body[:500]
+                significant_commits.append(sig_commit)
+
+        # Collect PR narratives and review feedback
+        pr_narratives = []
+        review_feedback = []
+        for commit in phase.commits:
+            if commit.has_github_context():
+                pr_title = commit.get_pr_title()
+                pr_body = commit.get_pr_body()
+                reviews = commit.get_review_comments()
+                labels = commit.get_pr_labels()
+
+                if pr_title and pr_body:
+                    pr_narratives.append({
+                        'commit': commit.short_hash,
+                        'title': pr_title,
+                        'body': pr_body[:400] if pr_body else None,
+                        'labels': labels,
+                    })
+
+                if reviews:
+                    for review in reviews[:2]:  # Limit per commit
+                        review_feedback.append({
+                            'commit': commit.short_hash,
+                            'feedback': review[:300]
+                        })
 
         # Get README changes
         readme_changes = []
@@ -142,6 +194,9 @@ class PhaseSummarizer:
             if commit.comment_samples:
                 comment_samples.extend(commit.comment_samples[:2])
         comment_samples = comment_samples[:5]  # Limit total
+
+        # Check if we have GitHub enrichment
+        has_github_data = any(c.has_github_context() for c in phase.commits)
 
         return {
             'phase_number': phase.phase_number,
@@ -166,6 +221,10 @@ class PhaseSummarizer:
             'significant_commits': significant_commits,
             'readme_changes': readme_changes,
             'comment_samples': comment_samples,
+            # GitHub enrichment data
+            'has_github_data': has_github_data,
+            'pr_narratives': pr_narratives[:10],  # Limit to 10 most relevant
+            'review_feedback': review_feedback[:10],  # Limit to 10 pieces of feedback
         }
 
     def _build_phase_prompt(self, phase_data: Dict[str, Any],
@@ -238,6 +297,24 @@ class PhaseSummarizer:
 {json.dumps(phase_data['comment_samples'], indent=2)}
 """
 
+        # Add GitHub PR context if available
+        if phase_data.get('has_github_data') and phase_data.get('pr_narratives'):
+            prompt += f"""
+
+**Pull Request Context (from GitHub):**
+The following PR descriptions provide context about why these changes were made:
+{json.dumps(phase_data['pr_narratives'], indent=2)}
+"""
+
+        # Add review feedback if available
+        if phase_data.get('review_feedback'):
+            prompt += f"""
+
+**Code Review Feedback:**
+The following feedback was provided during code reviews:
+{json.dumps(phase_data['review_feedback'], indent=2)}
+"""
+
         if context:
             prompt += f"\n**Context from Previous Phases:**\n{context}\n"
 
@@ -258,7 +335,28 @@ Be objective and factual. Focus on gaps, issues, and misalignments rather than a
 
 Write the critical assessment now:"""
         else:
-            prompt += """
+            # Check if we have GitHub context
+            if phase_data.get('has_github_data'):
+                prompt += """
+**Your Task:**
+Write a concise narrative summary (3-5 paragraphs) that:
+
+1. Describes the main activities during this phase, using PR titles and descriptions to explain the intent
+2. Explains major code additions, deletions, migrations, and cleanups - use PR context to explain WHY changes were made
+3. Incorporates relevant code review feedback to provide insight into design decisions or concerns raised
+4. Highlights how the README or documentation evolved
+5. Uses PR labels to categorize types of work (features, fixes, refactors)
+6. Notes any significant architectural or technical decisions mentioned in PRs
+7. Maintains chronological flow while being concise
+
+IMPORTANT: Prioritize PR descriptions and review feedback over commit messages when explaining changes.
+They provide richer context about the motivation and reasoning behind the code.
+
+Focus on the "why" and "what changed" rather than just listing commits. Make it read like a story of the codebase's evolution.
+
+Write the summary now:"""
+            else:
+                prompt += """
 **Your Task:**
 Write a concise narrative summary (3-5 paragraphs) that:
 
