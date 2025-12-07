@@ -218,7 +218,7 @@ class StoryTeller:
 
         for p in phase_summaries:
             prompt += f"\n**Phase {p['phase_number']} ({p['start_date']} to {p['end_date']})**\n"
-            prompt += f"- LOC Δ: {p['loc_delta']:+,d} ({p['loc_delta_percent']:+.1f}%)\n"
+            prompt += f"- LOC D: {p['loc_delta']:+,d} ({p['loc_delta_percent']:+.1f}%)\n"
             prompt += f"- Summary: {p['summary']}\n"
 
         if self.critical_mode:
@@ -282,7 +282,7 @@ Write the executive summary now:"""
         for p in phase_summaries:
             prompt += f"\n**Phase {p['phase_number']} ({p['start_date']} to {p['end_date']})**\n"
             prompt += f"- Commits: {p['commit_count']}\n"
-            prompt += f"- LOC Δ: {p['loc_delta']:+,d} ({p['loc_delta_percent']:+.1f}%)\n"
+            prompt += f"- LOC D: {p['loc_delta']:+,d} ({p['loc_delta_percent']:+.1f}%)\n"
             prompt += f"- Authors: {', '.join(p['authors'])}\n"
             prompt += f"- Summary: {p['summary']}\n"
 
@@ -480,7 +480,7 @@ Write the deletion story now:"""
 
         for p in phase_summaries:
             prompt += f"\n**Phase {p['phase_number']} ({p['start_date']} to {p['end_date']})**\n"
-            prompt += f"- Commits: {p['commit_count']}, LOC Δ: {p['loc_delta']:+,d}\n"
+            prompt += f"- Commits: {p['commit_count']}, LOC D: {p['loc_delta']:+,d}\n"
             prompt += f"- Authors: {', '.join(p['authors'])}\n"
             prompt += f"{p['summary']}\n"
 
