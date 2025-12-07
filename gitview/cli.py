@@ -257,6 +257,30 @@ GITHUB ENRICHMENT (PR & Review Context):
 """
 
 
+def _load_cached_analysis(output_dir: str):
+    """Load cached commit history and phases if available."""
+
+    history_file = Path(output_dir) / "repo_history.jsonl"
+    phases_dir = Path(output_dir) / "phases"
+
+    cached_records = None
+    cached_phases = None
+
+    if history_file.exists():
+        try:
+            cached_records = GitHistoryExtractor.load_from_jsonl(str(history_file))
+        except Exception as exc:  # pragma: no cover - defensive logging
+            console.print(f"[yellow]Warning: Failed to load cached commit history: {exc}[/yellow]")
+
+    if phases_dir.exists():
+        try:
+            cached_phases = HistoryChunker.load_phases(str(phases_dir))
+        except Exception as exc:  # pragma: no cover - defensive logging
+            console.print(f"[yellow]Warning: Failed to load cached phases: {exc}[/yellow]")
+
+    return cached_records, cached_phases
+
+
 def _analyze_single_branch(
     repo_path: str,
     branch: str,
@@ -286,6 +310,8 @@ def _analyze_single_branch(
     previous_analysis = None
     existing_phases = []
     starting_loc = 0
+    cached_records = None
+    cached_phases = None
 
     if incremental or since_commit or since_date:
         # Load previous analysis
@@ -312,31 +338,38 @@ def _analyze_single_branch(
             if existing_phases and existing_phases[-1].commits:
                 starting_loc = existing_phases[-1].commits[-1].loc_total
 
+    if not since_commit and not since_date:
+        cached_records, cached_phases = _load_cached_analysis(output)
+
     # Step 1: Extract git history
     console.print("[bold]Step 1: Extracting git history...[/bold]")
     extractor = GitHistoryExtractor(repo_path)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task("Extracting commits...", total=None)
+    if cached_records is not None and not since_commit and not since_date:
+        records = cached_records
+        console.print("[cyan]Found cached commit history; reusing repo_history.jsonl from previous run.[/cyan]\n")
+    else:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Extracting commits...", total=None)
 
-        # Use incremental extraction if requested
-        if since_commit or since_date:
-            records = extractor.extract_incremental(
-                since_commit=since_commit,
-                since_date=since_date,
-                branch=branch
-            )
-            # Adjust LOC to continue from previous analysis
-            if starting_loc > 0:
-                extractor._calculate_cumulative_loc(records, starting_loc)
-        else:
-            records = extractor.extract_history(max_commits=max_commits, branch=branch)
+            # Use incremental extraction if requested
+            if since_commit or since_date:
+                records = extractor.extract_incremental(
+                    since_commit=since_commit,
+                    since_date=since_date,
+                    branch=branch
+                )
+                # Adjust LOC to continue from previous analysis
+                if starting_loc > 0:
+                    extractor._calculate_cumulative_loc(records, starting_loc)
+            else:
+                records = extractor.extract_history(max_commits=max_commits, branch=branch)
 
-        progress.update(task, completed=True)
+            progress.update(task, completed=True)
 
     if since_commit or since_date:
         console.print(f"[green]Extracted {len(records)} new commits[/green]\n")
@@ -437,6 +470,9 @@ def _analyze_single_branch(
 
             phases = existing_phases + new_phases
             console.print(f"[green]Created {len(new_phases)} new phases (total: {len(phases)})[/green]\n")
+    elif cached_phases is not None and not since_commit and not since_date:
+        phases = cached_phases
+        console.print(f"[cyan]Reusing {len(phases)} cached phases from previous run.[/cyan]\n")
     else:
         # Full analysis: chunk normally
         phases = chunker.chunk(records, **kwargs)
@@ -875,6 +911,8 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
         previous_analysis = None
         existing_phases = []
         starting_loc = 0
+        cached_records = None
+        cached_phases = None
 
         if incremental or since_commit or since_date:
             # Load previous analysis
@@ -898,34 +936,41 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                 from .chunker import Phase
                 existing_phases = [Phase.from_dict(p) for p in previous_analysis.get('phases', [])]
 
-                if existing_phases and existing_phases[-1].commits:
-                    starting_loc = existing_phases[-1].commits[-1].loc_total
+            if existing_phases and existing_phases[-1].commits:
+                starting_loc = existing_phases[-1].commits[-1].loc_total
+
+        if not since_commit and not since_date:
+            cached_records, cached_phases = _load_cached_analysis(output)
 
         # Step 1: Extract git history
         console.print("[bold]Step 1: Extracting git history...[/bold]")
         extractor = GitHistoryExtractor(str(repo_path))
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            task = progress.add_task("Extracting commits...", total=None)
+        if cached_records is not None and not since_commit and not since_date:
+            records = cached_records
+            console.print("[cyan]Found cached commit history; reusing repo_history.jsonl from previous run.[/cyan]\n")
+        else:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                task = progress.add_task("Extracting commits...", total=None)
 
-            # Use incremental extraction if requested
-            if since_commit or since_date:
-                records = extractor.extract_incremental(
-                    since_commit=since_commit,
-                    since_date=since_date,
-                    branch=branch
-                )
-                # Adjust LOC to continue from previous analysis
-                if starting_loc > 0:
-                    extractor._calculate_cumulative_loc(records, starting_loc)
-            else:
-                records = extractor.extract_history(max_commits=max_commits, branch=branch)
+                # Use incremental extraction if requested
+                if since_commit or since_date:
+                    records = extractor.extract_incremental(
+                        since_commit=since_commit,
+                        since_date=since_date,
+                        branch=branch
+                    )
+                    # Adjust LOC to continue from previous analysis
+                    if starting_loc > 0:
+                        extractor._calculate_cumulative_loc(records, starting_loc)
+                else:
+                    records = extractor.extract_history(max_commits=max_commits, branch=branch)
 
-            progress.update(task, completed=True)
+                progress.update(task, completed=True)
 
         if since_commit or since_date:
             console.print(f"[green]Extracted {len(records)} new commits[/green]\n")
@@ -1052,6 +1097,9 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
 
                 phases = existing_phases + new_phases
                 console.print(f"[green]Created {len(new_phases)} new phases (total: {len(phases)})[/green]\n")
+        elif cached_phases is not None and not since_commit and not since_date:
+            phases = cached_phases
+            console.print(f"[cyan]Reusing {len(phases)} cached phases from previous run.[/cyan]\n")
         else:
             # Full analysis: chunk normally
             phases = chunker.chunk(records, **kwargs)
