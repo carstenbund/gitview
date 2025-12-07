@@ -811,7 +811,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                 github_repo_url = None
                 if github_token:
                     if not repo_handler.is_local and repo_handler.repo_info:
-                        github_repo_url = f"{repo_handler.repo_info.owner}/{repo_handler.repo_info.repo}"
+                        github_repo_url = f"{repo_handler.repo_info.org}/{repo_handler.repo_info.repo}"
                     elif repo_handler.is_local:
                         try:
                             from git import Repo as GitRepo
@@ -948,7 +948,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
             # Determine repo URL for GitHub API
             github_repo_url = None
             if not repo_handler.is_local and repo_handler.repo_info:
-                github_repo_url = f"{repo_handler.repo_info.owner}/{repo_handler.repo_info.repo}"
+                github_repo_url = f"{repo_handler.repo_info.org}/{repo_handler.repo_info.repo}"
             elif repo_handler.is_local:
                 # Try to detect GitHub remote from local repo
                 try:
