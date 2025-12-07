@@ -29,10 +29,10 @@ jobs:
 
     - name: Verify installation
       run: |
-        gitview --version
+        python -m gitview.cli --version
         python verify_installation.py
 
     - name: Test basic functionality
       run: |
-        gitview --help
-        gitview analyze --help
+        python -m gitview.cli --help
+        python -m gitview.cli analyze --help
