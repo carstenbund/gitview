@@ -171,10 +171,10 @@ class HistoryChunker:
         Args:
             config: Configuration dict with thresholds
         """
-        # Default thresholds
-        loc_threshold = config.get('loc_threshold', 0.3)
+        # Default thresholds (tuned for smaller, more detailed phases)
+        loc_threshold = config.get('loc_threshold', 0.25)
         min_chunk_size = config.get('min_chunk_size', 5)
-        max_chunk_size = config.get('max_chunk_size', 100)
+        max_chunk_size = config.get('max_chunk_size', 60)
         readme_change_split = config.get('readme_change_split', True)
         refactor_split = config.get('refactor_split', True)
 
