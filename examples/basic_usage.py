@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Basic usage example for GitView."""
+"""Basic usage example for GitView. V. 0.2.1"""
 
 from gitview.extractor import extract_git_history
 from gitview.chunker import chunk_history
