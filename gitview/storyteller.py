@@ -29,9 +29,9 @@ class StoryTeller:
         """
         self.router = LLMRouter(backend=backend, model=model, api_key=api_key, **kwargs)
         self.model = self.router.model
-        self.todo_content = todo_content
+        self.todo_content = self._truncate_content(todo_content, 2000)
         self.critical_mode = critical_mode
-        self.directives = directives
+        self.directives = self._truncate_content(directives, 2000)
 
     def generate_global_story(self, phases: List[Phase],
                              repo_name: Optional[str] = None) -> Dict[str, str]:
@@ -107,7 +107,7 @@ class StoryTeller:
                 'has_large_addition': phase.has_large_addition,
                 'has_refactor': phase.has_refactor,
                 'readme_changed': phase.readme_changed,
-                'summary': phase.summary,
+                'summary': self._truncate_content(phase.summary, 800),
             }
 
             # Check for GitHub enrichment and collect key PR data
@@ -132,6 +132,26 @@ class StoryTeller:
             summaries.append(phase_data)
 
         return summaries
+
+    @staticmethod
+    def _truncate_content(content: Optional[str], max_chars: int) -> Optional[str]:
+        """Ensure arbitrary content does not exceed the model context.
+
+        Args:
+            content: Original content (may be None)
+            max_chars: Maximum character length to preserve
+
+        Returns:
+            The original content truncated to ``max_chars`` with an ellipsis when
+            truncation occurred. ``None`` is returned unchanged.
+        """
+        if content is None:
+            return None
+
+        if len(content) <= max_chars:
+            return content
+
+        return content[: max_chars].rstrip() + "…"
 
     def _generate_executive_summary(self, phase_summaries: List[Dict[str, Any]],
                                    repo_name: Optional[str] = None) -> str:
