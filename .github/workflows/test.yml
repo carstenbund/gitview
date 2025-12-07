@@ -28,15 +28,11 @@ jobs:
         pip install -e .
 
     - name: Verify installation
-      env:
-        PYTHONIOENCODING: utf-8
       run: |
         python -m gitview.cli --version
         python verify_installation.py
 
     - name: Test basic functionality
-      env:
-        PYTHONIOENCODING: utf-8
       run: |
         python -m gitview.cli --help
         python -m gitview.cli analyze --help
