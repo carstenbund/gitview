@@ -159,7 +159,7 @@ class OutputWriter:
 
         # Phase-by-phase stats
         f.write("### Phase-by-Phase Statistics\n\n")
-        f.write("| Phase | Period | Commits | LOC Δ | Δ% | Insertions | Deletions |\n")
+        f.write("| Phase | Period | Commits | LOC D | D% | Insertions | Deletions |\n")
         f.write("|-------|--------|---------|-------|-----|------------|------------|\n")
 
         for p in phases:

@@ -18,7 +18,7 @@ def main():
         output_path="output/example_history.jsonl",
         max_commits=100  # Limit for example
     )
-    print(f"   ✓ Extracted {len(records)} commits")
+    print(f"   [OK] Extracted {len(records)} commits")
 
     # Chunk into phases
     print("\n2. Chunking into phases...")
@@ -27,7 +27,7 @@ def main():
         strategy="adaptive",
         output_dir="output/example_phases"
     )
-    print(f"   ✓ Created {len(phases)} phases")
+    print(f"   [OK] Created {len(phases)} phases")
 
     # Display phase overview
     print("\n3. Phase Overview:")
@@ -36,7 +36,7 @@ def main():
         print(f"   Phase {phase.phase_number}: "
               f"{phase.start_date[:10]} to {phase.end_date[:10]}")
         print(f"      Commits: {phase.commit_count}, "
-              f"LOC Δ: {phase.loc_delta:+,d} ({phase.loc_delta_percent:+.1f}%)")
+              f"LOC D: {phase.loc_delta:+,d} ({phase.loc_delta_percent:+.1f}%)")
 
     # Write simple timeline
     print("\n4. Writing timeline...")
@@ -44,7 +44,7 @@ def main():
         phases,
         "output/example_timeline.md"
     )
-    print("   ✓ Timeline written to output/example_timeline.md")
+    print("   [OK] Timeline written to output/example_timeline.md")
 
     print("\n" + "=" * 50)
     print("Example complete!")

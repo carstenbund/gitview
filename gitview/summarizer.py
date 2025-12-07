@@ -285,7 +285,7 @@ Write the summary now:"""
         for summary_info in previous_summaries[-3:]:  # Last 3 phases
             context_parts.append(
                 f"Phase {summary_info['phase_number']} "
-                f"(LOC Δ: {summary_info['loc_delta']:+,d}): "
+                f"(LOC D: {summary_info['loc_delta']:+,d}): "
                 f"{summary_info['summary'][:200]}..."
             )
 
