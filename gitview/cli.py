@@ -80,8 +80,9 @@ GitView supports both local and remote repositories:
     gitview analyze --repo git@github.com:org/repo.git
 
 For remote repositories:
-  - Automatically clones to temporary directory
-  - Cleans up temp clone after analysis (use --keep-clone to preserve)
+  - Automatically clones to cached directory (~/.gitview/cache/repos/{host}/{org}/{repo})
+  - Reuses cached clones for 24 hours and fetches updates to avoid full re-downloads
+  - Cached clones are preserved for reuse; use --keep-clone to skip cleanup of additional temp copies
   - Outputs to ~/Documents/gitview/github.com/org/repo/ by default
   - Warns if repository is very large (>100MB)
 
@@ -601,7 +602,7 @@ def _analyze_single_branch(
 @click.option('--since-date',
               help="Extract commits since this date (ISO format: YYYY-MM-DD)")
 @click.option('--keep-clone', is_flag=True,
-              help="Keep temporary clone of remote repository (default: cleanup after analysis)")
+              help="Keep any temporary clone copies (cached clones under ~/.gitview/cache/repos are preserved automatically)")
 @click.option('--todo',
               help="Path to todo/goals file for critical examination mode. "
                    "Evaluates commits against objectives defined in this file.")
