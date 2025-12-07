@@ -50,9 +50,9 @@ class PhaseSummarizer:
         # Build prompt
         prompt = self._build_phase_prompt(phase_data, context)
 
-        # Call LLM backend
+        # Call LLM backend with guard against context length limits
         messages = [LLMMessage(role="user", content=prompt)]
-        response = self.router.generate(messages, max_tokens=2000)
+        response = self._generate_with_context_guard(messages, initial_max_tokens=1200)
 
         return response.content.strip()
 
@@ -397,6 +397,38 @@ Write the summary now:"""
         phase_file = output_path / f"phase_{phase.phase_number:02d}.json"
         with open(phase_file, 'w') as f:
             json.dump(phase.to_dict(), f, indent=2)
+
+    def _generate_with_context_guard(
+        self,
+        messages: List[LLMMessage],
+        initial_max_tokens: int = 1200,
+    ):
+        """Generate a response while reducing max tokens if the request is too large."""
+
+        max_tokens = initial_max_tokens
+        min_tokens = 200
+
+        while True:
+            try:
+                return self.router.generate(messages, max_tokens=max_tokens)
+            except Exception as exc:
+                error_message = str(exc).lower()
+
+                if "context" not in error_message:
+                    # Not a context window issue; re-raise immediately
+                    raise
+
+                if max_tokens <= min_tokens:
+                    # We have already reduced generation as far as we can
+                    raise
+
+                # Reduce generation budget and retry to fit within context limits
+                next_max_tokens = max(min_tokens, int(max_tokens * 0.7))
+                print(
+                    "Encountered context window limit; "
+                    f"retrying with max_tokens={next_max_tokens}"
+                )
+                max_tokens = next_max_tokens
 
 
 def summarize_phases(phases: List[Phase],
