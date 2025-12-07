@@ -562,7 +562,7 @@ MIT License - see LICENSE file for details
 
 
 
-[github-ci]: https://github.com/carstenbund/gitview/actions/workflows/tests.yml/badge.svg?branch=master
+[github-ci]: https://github.com/carstenbund/gitview/actions/workflows/test.yml/badge.svg?branch=main
 [github-link]: https://github.com/carstenbund/gitview
 [pypi-badge]: https://img.shields.io/pypi/v/gitview.svg
 [pypi-link]: https://pypi.org/project/gitview
