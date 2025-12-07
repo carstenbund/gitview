@@ -4,10 +4,10 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
-from pathlib import Path
-from typing import Optional, Tuple
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
 
 from rich.console import Console
@@ -50,6 +50,9 @@ class RemoteRepoHandler:
         self.repo_spec = repo_spec
         self.is_local = self._is_local_path(repo_spec)
         self.temp_dir: Optional[Path] = None
+        self.cache_dir = Path.home() / ".gitview" / "cache" / "repos"
+        self.cache_ttl = timedelta(hours=24)
+        self._using_cache = False
 
         if not self.is_local:
             self.repo_info = self._parse_remote_url(repo_spec)
@@ -155,14 +158,22 @@ class RemoteRepoHandler:
         if self.is_local:
             raise ValueError("Cannot clone local repository")
 
-        # Create temp directory
-        self.temp_dir = Path(tempfile.mkdtemp(prefix='gitview_'))
-        target_path = self.temp_dir / self.repo_info.repo
+        target_path = self._get_cache_repo_path()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try to reuse cached clone if available
+        cached_path = self._try_use_cached_repo(target_path, progress_callback)
+        if cached_path:
+            return cached_path
 
         console.print(f"[cyan]Cloning remote repository:[/cyan] {self.repo_info.url}")
         console.print(f"[dim]Target: {target_path}[/dim]")
 
         try:
+            # Ensure previous failed attempts are removed
+            if target_path.exists():
+                shutil.rmtree(target_path)
+
             # Clone the repository
             cmd = ['git', 'clone', '--progress', self.repo_info.url, str(target_path)]
 
@@ -189,6 +200,9 @@ class RemoteRepoHandler:
 
             # Check repository size
             size_mb = self._get_directory_size(target_path)
+
+            self._using_cache = True
+            self._write_cache_metadata(target_path)
 
             if size_mb > 1000:  # > 1GB
                 console.print(f"[yellow]Warning: Large repository ({size_mb:.1f} MB)[/yellow]")
@@ -226,6 +240,10 @@ class RemoteRepoHandler:
 
     def cleanup(self):
         """Remove temporary clone directory."""
+        if self._using_cache:
+            console.print("[dim]Cached repository preserved for 24h reuse.[/dim]")
+            return
+
         if self.temp_dir and self.temp_dir.exists():
             try:
                 console.print(f"[dim]Cleaning up temporary clone: {self.temp_dir}[/dim]")
@@ -262,6 +280,78 @@ class RemoteRepoHandler:
         else:
             # For remote repos, use full path with host
             return base / self.repo_info.full_path
+
+    def _get_cache_repo_path(self) -> Path:
+        """Get the cache location for this remote repo."""
+        return self.cache_dir / self.repo_info.full_path
+
+    def _write_cache_metadata(self, repo_path: Path) -> None:
+        """Update cache metadata timestamp."""
+        meta_file = repo_path / ".gitview_cache.json"
+        meta_file.write_text(datetime.utcnow().isoformat())
+
+    def _is_cache_fresh(self, repo_path: Path) -> bool:
+        """Check if cached repo was refreshed within TTL."""
+        meta_file = repo_path / ".gitview_cache.json"
+        if not meta_file.exists():
+            return False
+
+        try:
+            cached_at = datetime.fromisoformat(meta_file.read_text().strip())
+            return datetime.utcnow() - cached_at <= self.cache_ttl
+        except Exception:
+            return False
+
+    def _refresh_cached_repo(self, repo_path: Path, progress_callback=None) -> None:
+        """Fetch updates for cached repository."""
+        if not (repo_path / ".git").exists():
+            raise ValueError("Cached path is not a git repository")
+
+        console.print(f"[cyan]Using cached repository:[/cyan] {repo_path}")
+
+        if self._is_cache_fresh(repo_path):
+            console.print("[dim]Cache refreshed within 24h; skipping full re-clone.[/dim]")
+        else:
+            console.print("[dim]Fetching updates to refresh cached repository...[/dim]")
+            cmd = ['git', '-C', str(repo_path), 'fetch', '--all', '--prune']
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            for line in process.stderr:
+                if progress_callback:
+                    progress_callback(line.strip())
+
+            process.wait()
+
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    process.returncode, cmd,
+                    output=process.stdout.read() if process.stdout else None,
+                    stderr=process.stderr.read() if process.stderr else None
+                )
+
+        self._using_cache = True
+        self._write_cache_metadata(repo_path)
+
+    def _try_use_cached_repo(self, target_path: Path, progress_callback=None) -> Optional[Path]:
+        """Attempt to reuse a cached repository clone."""
+        if not target_path.exists():
+            return None
+
+        try:
+            self._refresh_cached_repo(target_path, progress_callback)
+            return target_path
+        except Exception as e:
+            console.print(f"[yellow]Cached repository unusable, re-cloning: {e}[/yellow]")
+            try:
+                shutil.rmtree(target_path)
+            except Exception:
+                pass
+            return None
 
 
 def resolve_repo_spec(repo_spec: str) -> RemoteRepoHandler:
