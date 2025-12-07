@@ -24,7 +24,7 @@ class LLMRouter:
     # Default models for each backend
     DEFAULT_MODELS = {
         LLMBackend.ANTHROPIC: "claude-sonnet-4-5-20250929",
-        LLMBackend.OPENAI: "gpt-4",
+        LLMBackend.OPENAI: "gpt-4o-mini",
         LLMBackend.OLLAMA: "llama3",
     }
 
