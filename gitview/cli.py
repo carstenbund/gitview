@@ -118,9 +118,9 @@ GitView supports three LLM backends:
 \b
 Backend auto-detection:
   If no --backend is specified, GitView checks environment variables:
-  - If ANTHROPIC_API_KEY is set → uses Anthropic
-  - If OPENAI_API_KEY is set → uses OpenAI
-  - Otherwise → uses Ollama (local)
+  - If ANTHROPIC_API_KEY is set -> uses Anthropic
+  - If OPENAI_API_KEY is set -> uses OpenAI
+  - Otherwise -> uses Ollama (local)
 
 \b
 EXAMPLES:
@@ -719,7 +719,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
             analyzed_branches = []
 
             for idx, branch_info in enumerate(branches_to_analyze, 1):
-                console.print(f"\n[bold cyan]═══ Analyzing Branch {idx}/{len(branches_to_analyze)}: {branch_info.name} ═══[/bold cyan]\n")
+                console.print(f"\n[bold cyan]=== Analyzing Branch {idx}/{len(branches_to_analyze)}: {branch_info.name} ===[/bold cyan]\n")
 
                 # Set branch-specific output directory
                 branch_output = base_output_dir / branch_info.sanitized_name
@@ -1175,7 +1175,7 @@ def _display_phase_overview(phases):
     table.add_column("Phase", style="cyan", justify="right")
     table.add_column("Period", style="magenta")
     table.add_column("Commits", justify="right")
-    table.add_column("LOC Δ", justify="right")
+    table.add_column("LOC D", justify="right")
     table.add_column("Events", style="yellow")
 
     for phase in phases:
