@@ -2,6 +2,12 @@
 """Setup script for GitView."""
 
 from setuptools import setup, find_packages
+import os
+import sys
+
+# Add gitview to path to import __version__
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'gitview'))
+from __init__ import __version__
 
 # Read long description from README
 with open("README.md", "r", encoding="utf-8") as fh:
@@ -13,7 +19,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="gitview",
-    version="0.2.2",
+    version=__version__,
     author="GitView Contributors",
     author_email="",  # Add if publishing
     description="Git history analyzer with LLM-powered narrative generation",
