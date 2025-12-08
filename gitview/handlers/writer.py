@@ -4,6 +4,8 @@ Handles writing all output files including markdown reports,
 JSON data, and timelines.
 """
 
+from typing import Optional
+
 from ..analyzer import AnalysisContext
 from .base import BaseHandler, HandlerError
 
@@ -29,10 +31,12 @@ class OutputWriterHandler(BaseHandler):
         self._log_bold("Step 5: Writing output files...")
 
         try:
+            readme_overview = self._build_readme_overview(context)
+
             if self.config.skip_llm:
                 self._write_timeline_only(context)
             else:
-                self._write_all_outputs(context)
+                self._write_all_outputs(context, readme_overview)
 
         except Exception as e:
             raise HandlerError(f"Failed to write output files: {e}") from e
@@ -52,7 +56,7 @@ class OutputWriterHandler(BaseHandler):
 
         self._log_success(f"Wrote timeline to {timeline_path}\n")
 
-    def _write_all_outputs(self, context: AnalysisContext) -> None:
+    def _write_all_outputs(self, context: AnalysisContext, readme_overview: Optional[dict]) -> None:
         """Write all output files (markdown, JSON, timeline).
 
         Args:
@@ -66,7 +70,8 @@ class OutputWriterHandler(BaseHandler):
             context.stories,
             context.phases,
             str(markdown_path),
-            self.config.repo_name
+            self.config.repo_name,
+            readme_overview=readme_overview,
         )
         self._log_success(f"Wrote {markdown_path}")
 
@@ -76,7 +81,8 @@ class OutputWriterHandler(BaseHandler):
             context.stories,
             context.phases,
             str(json_path),
-            repo_path=str(self.config.repo_path)
+            repo_path=str(self.config.repo_path),
+            readme_overview=readme_overview,
         )
         self._log_success(f"Wrote {json_path}")
 
@@ -84,3 +90,13 @@ class OutputWriterHandler(BaseHandler):
         timeline_path = self.config.output_dir / "timeline.md"
         OutputWriter.write_simple_timeline(context.phases, str(timeline_path))
         self._log_success(f"Wrote {timeline_path}\n")
+
+    def _build_readme_overview(self, context: AnalysisContext) -> Optional[dict]:
+        """Shape README context for output writers."""
+        if not context.readme_overview:
+            return None
+
+        return {
+            'path': str(context.readme_path) if context.readme_path else 'README',
+            'excerpt': context.readme_overview,
+        }
