@@ -4,6 +4,9 @@ Handles extracting commit history from repositories with support
 for caching and incremental analysis.
 """
 
+from pathlib import Path
+from typing import Optional
+
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from ..analyzer import AnalysisContext
@@ -47,6 +50,9 @@ class ExtractionHandler(BaseHandler):
 
             # 4. Display summary
             self._display_summary(context)
+
+            # 5. Load README overview for context
+            self._load_repository_readme(context)
 
         except Exception as e:
             raise HandlerError(f"Failed to extract git history: {e}") from e
@@ -128,3 +134,40 @@ class ExtractionHandler(BaseHandler):
                 self._log_info("No new commits since last analysis.")
         else:
             self._log_success(f"Extracted {count} commits\n")
+
+    def _load_repository_readme(self, context: AnalysisContext) -> None:
+        """Load README content to give analysts project context."""
+        readme_path = self._find_readme_path(self.config.repo_path)
+        if not readme_path:
+            self._log_warning("No README found for repository overview.")
+            return
+
+        try:
+            content = readme_path.read_text(encoding="utf-8", errors="ignore").strip()
+            if not content:
+                self._log_warning(f"README {readme_path.name} is empty or unreadable.")
+                return
+
+            context.readme_path = readme_path
+            context.readme_overview = content[:4000]
+            self._log_info(f"Loaded README overview from {readme_path.name}.")
+        except Exception as exc:
+            self._log_warning(f"Could not read README for overview: {exc}")
+
+    @staticmethod
+    def _find_readme_path(repo_path) -> Optional[Path]:
+        """Return the first README-like file in the repository root."""
+        candidate_names = [
+            "README.md",
+            "README.rst",
+            "README.txt",
+            "README",
+            "readme.md",
+        ]
+
+        repo_root = Path(repo_path)
+        for name in candidate_names:
+            candidate = repo_root / name
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        return None

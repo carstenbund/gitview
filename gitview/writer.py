@@ -33,8 +33,13 @@ class OutputWriter:
             return None
 
     @staticmethod
-    def write_markdown(stories: Dict[str, str], phases: List[Phase],
-                      output_path: str, repo_name: str = "Repository"):
+    def write_markdown(
+        stories: Dict[str, str],
+        phases: List[Phase],
+        output_path: str,
+        repo_name: str = "Repository",
+        readme_overview: Dict[str, str] | None = None,
+    ):
         """
         Write comprehensive markdown report.
 
@@ -55,13 +60,27 @@ class OutputWriter:
 
             # Table of Contents
             f.write("## Table of Contents\n\n")
-            f.write("1. [Executive Summary](#executive-summary)\n")
-            f.write("2. [Timeline](#timeline)\n")
-            f.write("3. [Full Narrative](#full-narrative)\n")
-            f.write("4. [Technical Evolution](#technical-evolution)\n")
-            f.write("5. [Story of Deletions](#story-of-deletions)\n")
-            f.write("6. [Phase Details](#phase-details)\n")
-            f.write("7. [Statistics](#statistics)\n\n")
+            toc_items = [
+                "1. [Repository Overview](#repository-overview)",
+                "2. [Executive Summary](#executive-summary)",
+                "3. [Timeline](#timeline)",
+                "4. [Full Narrative](#full-narrative)",
+                "5. [Technical Evolution](#technical-evolution)",
+                "6. [Story of Deletions](#story-of-deletions)",
+                "7. [Phase Details](#phase-details)",
+                "8. [Statistics](#statistics)",
+            ]
+            f.write("\n".join(toc_items) + "\n\n")
+            f.write("---\n\n")
+
+            # Repository Overview from README
+            f.write("## Repository Overview\n\n")
+            if readme_overview:
+                path_display = readme_overview.get('path', 'README')
+                f.write(f"Source: `{path_display}`\n\n")
+                f.write(readme_overview.get('excerpt', '').strip() + "\n\n")
+            else:
+                f.write("No README content was found in the repository root.\n\n")
             f.write("---\n\n")
 
             # Executive Summary
@@ -185,8 +204,13 @@ class OutputWriter:
             f.write("\n")
 
     @staticmethod
-    def write_json(stories: Dict[str, str], phases: List[Phase], output_path: str,
-                   repo_path: str = None):
+    def write_json(
+        stories: Dict[str, str],
+        phases: List[Phase],
+        output_path: str,
+        repo_path: str = None,
+        readme_overview: Dict[str, str] | None = None,
+    ):
         """
         Write complete data to JSON file with metadata for incremental analysis.
 
@@ -220,6 +244,7 @@ class OutputWriter:
             'metadata': metadata,
             'total_phases': len(phases),
             'total_commits': sum(p.commit_count for p in phases),
+            'readme_overview': readme_overview or {},
             'stories': stories,
             'phases': [p.to_dict() for p in phases],
         }
@@ -281,8 +306,13 @@ class OutputWriter:
                 f.write("---\n\n")
 
 
-def write_output(stories: Dict[str, str], phases: List[Phase],
-                output_dir: str = "docs", repo_name: str = "Repository"):
+def write_output(
+    stories: Dict[str, str],
+    phases: List[Phase],
+    output_dir: str = "docs",
+    repo_name: str = "Repository",
+    readme_overview: Dict[str, str] | None = None,
+):
     """
     Write all output formats.
 
@@ -297,12 +327,20 @@ def write_output(stories: Dict[str, str], phases: List[Phase],
 
     # Write main markdown report
     markdown_path = output_path / "history_story.md"
-    OutputWriter.write_markdown(stories, phases, str(markdown_path), repo_name)
+    OutputWriter.write_markdown(
+        stories,
+        phases,
+        str(markdown_path),
+        repo_name,
+        readme_overview=readme_overview,
+    )
     print(f"Wrote markdown report to: {markdown_path}")
 
     # Write JSON data
     json_path = output_path / "history_data.json"
-    OutputWriter.write_json(stories, phases, str(json_path))
+    OutputWriter.write_json(
+        stories, phases, str(json_path), readme_overview=readme_overview
+    )
     print(f"Wrote JSON data to: {json_path}")
 
     # Write simple timeline

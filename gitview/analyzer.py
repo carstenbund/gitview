@@ -165,6 +165,8 @@ class AnalysisContext:
     records: List[Any] = field(default_factory=list)  # CommitRecord objects
     phases: List[Any] = field(default_factory=list)   # Phase objects
     stories: Dict[str, str] = field(default_factory=dict)
+    readme_path: Optional[Path] = None
+    readme_overview: Optional[str] = None
 
     # Caching and incremental support
     cached_records: Optional[List[Any]] = None
