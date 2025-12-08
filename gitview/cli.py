@@ -378,7 +378,7 @@ def _analyze_single_branch(
     output: str,
     repo_name: str,
     strategy: str,
-    summarization_strategy: str,
+    summarization_strategy: str = 'simple',
     chunk_size: int,
     max_commits: Optional[int],
     backend: Optional[str],
