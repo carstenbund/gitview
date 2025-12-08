@@ -69,6 +69,11 @@ class ChunkerHandler(BaseHandler):
                 )
             except Exception as e:
                 self._log_warning(f"Failed to load cached phases: {e}")
+                self._log_warning(
+                    "This usually means the cache directory only has summaries "
+                    "from an interrupted or older run; delete the phases folder to "
+                    "recompute commit details."
+                )
 
     def _create_new_phases(self, context: AnalysisContext) -> None:
         """Create new phases from records.

@@ -293,6 +293,7 @@ def _analyze_single_branch_with_pipeline(
     model: Optional[str],
     api_key: Optional[str],
     ollama_url: str,
+    summarization_strategy: str,
     skip_llm: bool,
     incremental: bool,
     since_commit: Optional[str],
@@ -321,6 +322,7 @@ def _analyze_single_branch_with_pipeline(
         model=model,
         api_key=api_key,
         ollama_url=ollama_url,
+        summarization_strategy=summarization_strategy,
         incremental=incremental,
         since_commit=since_commit,
         since_date=since_date,
@@ -686,6 +688,13 @@ def _analyze_single_branch(
               help="Ollama server URL (only for --backend ollama)")
 @click.option('--repo-name',
               help="Repository name for output (default: directory name)")
+@click.option('--summarization-strategy',
+              type=click.Choice(['simple', 'hierarchical']),
+              default='simple',
+              help="Summarization strategy: 'simple' (default) or 'hierarchical' "
+                   "(better fidelity for large/complex histories)")
+@click.option('--hierarchical', is_flag=True,
+              help="Shortcut for --summarization-strategy hierarchical")
 @click.option('--skip-llm', is_flag=True,
               help="Skip LLM summarization - only extract and chunk history "
                    "(useful for quick analysis without API costs)")
@@ -712,7 +721,7 @@ def _analyze_single_branch(
                    "Can also be set via GITHUB_TOKEN environment variable.")
 def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branches,
            branches, all_branches, exclude_branches, backend, model, api_key, ollama_url,
-           repo_name, skip_llm, incremental, since_commit, since_date, keep_clone,
+           repo_name, summarization_strategy, hierarchical, skip_llm, incremental, since_commit, since_date, keep_clone,
            todo, critical, directives, github_token):
     """Analyze git repository and generate narrative history.
 
@@ -740,6 +749,13 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
         if not critical:
             console.print("[yellow]Note: --todo specified without --critical. Consider using --critical for goal-focused analysis.[/yellow]")
         console.print()
+
+    # Normalize summarization strategy
+    if hierarchical:
+        summarization_strategy = 'hierarchical'
+
+    if summarization_strategy == 'hierarchical':
+        console.print("[cyan]Using hierarchical summarization strategy[/cyan]")
 
     # Validate critical mode
     if critical and not todo and not directives:
@@ -937,6 +953,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                     model=model,
                     api_key=api_key,
                     ollama_url=ollama_url,
+                    summarization_strategy=summarization_strategy,
                     skip_llm=skip_llm,
                     incremental=incremental,
                     since_commit=since_commit,
@@ -1001,6 +1018,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
             model=model,
             api_key=api_key,
             ollama_url=ollama_url,
+            summarization_strategy=summarization_strategy,
             skip_llm=skip_llm,
             incremental=incremental,
             since_commit=since_commit,
