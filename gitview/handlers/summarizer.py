@@ -155,7 +155,7 @@ class SummarizerHandler(BaseHandler):
                         # Store metadata to indicate hierarchical summary
                         if not hasattr(phase, 'metadata'):
                             phase.metadata = {}
-                        phase.metadata['hierarchical_summary'] = True
+                        phase.metadata['hierarchical_summary'] = result
                     else:
                         # Simple summarizer needs context
                         context_str = summarizer._build_context(previous_summaries)
