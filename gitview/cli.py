@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from . import __version__
 from .extractor import GitHistoryExtractor
 from .chunker import HistoryChunker
 from .summarizer import PhaseSummarizer
@@ -24,7 +25,7 @@ console = Console()
 
 
 @click.group()
-@click.version_option(version="0.2.1")
+@click.version_option(version=__version__)
 def cli():
     """GitView - Git history analyzer with LLM-powered narrative generation.
 
