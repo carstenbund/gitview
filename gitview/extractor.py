@@ -76,6 +76,12 @@ class CommitRecord:
             return self.github_context.get('pr_body')
         return None
 
+    def get_pr_number(self) -> Optional[int]:
+        """Get PR number if available."""
+        if self.github_context:
+            return self.github_context.get('pr_number')
+        return None
+
     def get_review_comments(self) -> List[str]:
         """Get review comments if available."""
         if self.github_context:
