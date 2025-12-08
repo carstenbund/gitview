@@ -16,7 +16,7 @@ from .chunker import HistoryChunker
 from .summarizer import PhaseSummarizer
 from .storyteller import StoryTeller
 from .hierarchical_summarizer import HierarchicalPhaseSummarizer
-from .hierarchical_storyteller import generate_hierarchical_timeline
+from .hierarchical_storyteller import HierarchicalStoryTeller
 from .writer import OutputWriter
 from .remote import RemoteRepoHandler
 from .branches import BranchManager, parse_branch_spec
@@ -647,6 +647,8 @@ def _analyze_single_branch(
     use_hierarchical = summarization_strategy == 'hierarchical'
 
     if use_hierarchical:
+        console.print("[cyan]Using hierarchical summarization strategy[/cyan]")
+        console.print("[yellow]Note: This makes more API calls but preserves more details\n[/yellow]")
         summarizer = HierarchicalPhaseSummarizer(
             backend=backend,
             model=model,
@@ -712,26 +714,54 @@ def _analyze_single_branch(
 
     # Step 4: Generate global story
     console.print("[bold]Step 4: Generating global narrative...[/bold]")
-    storyteller = StoryTeller(
-        backend=backend,
-        model=model,
-        api_key=api_key,
-        ollama_url=ollama_url,
-        todo_content=todo_content,
-        critical_mode=critical_mode,
-        directives=directives
-    )
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task("Generating story...", total=None)
-        stories = storyteller.generate_global_story(phases, repo_name, cache_dir=output)
-        progress.update(task, completed=True)
+    if use_hierarchical:
+        storyteller = HierarchicalStoryTeller(
+            backend=backend,
+            model=model,
+            api_key=api_key,
+            ollama_url=ollama_url,
+        )
 
-    console.print(f"[green]Generated global narrative[/green]\n")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Generating hierarchical timeline...", total=None)
+            timeline = storyteller.generate_timeline(phases, repo_name=repo_name)
+            progress.update(task, completed=True)
+
+        stories = {
+            'timeline': timeline,
+            'executive_summary': 'See timeline for detailed evolution',
+            'technical_evolution': 'See timeline for technical details',
+            'deletion_story': '',
+            'full_narrative': timeline,
+        }
+
+        console.print(f"[green]Generated hierarchical timeline[/green]\n")
+    else:
+        storyteller = StoryTeller(
+            backend=backend,
+            model=model,
+            api_key=api_key,
+            ollama_url=ollama_url,
+            todo_content=todo_content,
+            critical_mode=critical_mode,
+            directives=directives
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Generating story...", total=None)
+            stories = storyteller.generate_global_story(phases, repo_name, cache_dir=output)
+            progress.update(task, completed=True)
+
+        console.print(f"[green]Generated global narrative[/green]\n")
 
     # Step 5: Write output
     console.print("[bold]Step 5: Writing output files...[/bold]")
@@ -750,16 +780,8 @@ def _analyze_single_branch(
     # Write timeline
     timeline_path = output_path / "timeline.md"
     if use_hierarchical:
-        timeline_content = generate_hierarchical_timeline(
-            phases,
-            repo_name=repo_name,
-            backend=backend,
-            model=model,
-            api_key=api_key,
-            ollama_url=ollama_url,
-        )
         timeline_path.parent.mkdir(parents=True, exist_ok=True)
-        timeline_path.write_text(timeline_content)
+        timeline_path.write_text(stories['timeline'])
     else:
         OutputWriter.write_simple_timeline(phases, str(timeline_path))
     console.print(f"[green]Wrote {timeline_path}[/green]\n")
@@ -1065,6 +1087,7 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                     output=str(branch_output),
                     repo_name=f"{repo_name} ({branch_info.short_name})",
                     strategy=strategy,
+                    summarization_strategy=summarization_strategy,
                     chunk_size=chunk_size,
                     max_commits=max_commits,
                     backend=backend,
@@ -1318,6 +1341,8 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
         use_hierarchical = summarization_strategy == 'hierarchical'
 
         if use_hierarchical:
+            console.print("[cyan]Using hierarchical summarization strategy[/cyan]")
+            console.print("[yellow]Note: This makes more API calls but preserves more details\n[/yellow]")
             summarizer = HierarchicalPhaseSummarizer(
                 backend=backend,
                 model=model,
@@ -1385,26 +1410,54 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
 
         # Step 4: Generate global story
         console.print("[bold]Step 4: Generating global narrative...[/bold]")
-        storyteller = StoryTeller(
-            backend=backend,
-            model=model,
-            api_key=api_key,
-            ollama_url=ollama_url,
-            todo_content=todo_content,
-            critical_mode=critical,
-            directives=directives
-        )
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            task = progress.add_task("Generating story...", total=None)
-            stories = storyteller.generate_global_story(phases, repo_name)
-            progress.update(task, completed=True)
+        if use_hierarchical:
+            storyteller = HierarchicalStoryTeller(
+                backend=backend,
+                model=model,
+                api_key=api_key,
+                ollama_url=ollama_url,
+            )
 
-        console.print(f"[green]Generated global narrative[/green]\n")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                task = progress.add_task("Generating hierarchical timeline...", total=None)
+                timeline = storyteller.generate_timeline(phases, repo_name=repo_name)
+                progress.update(task, completed=True)
+
+            stories = {
+                'timeline': timeline,
+                'executive_summary': 'See timeline for detailed evolution',
+                'technical_evolution': 'See timeline for technical details',
+                'deletion_story': '',
+                'full_narrative': timeline,
+            }
+
+            console.print(f"[green]Generated hierarchical timeline[/green]\n")
+        else:
+            storyteller = StoryTeller(
+                backend=backend,
+                model=model,
+                api_key=api_key,
+                ollama_url=ollama_url,
+                todo_content=todo_content,
+                critical_mode=critical,
+                directives=directives
+            )
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                task = progress.add_task("Generating story...", total=None)
+                stories = storyteller.generate_global_story(phases, repo_name)
+                progress.update(task, completed=True)
+
+            console.print(f"[green]Generated global narrative[/green]\n")
 
         # Step 5: Write output
         console.print("[bold]Step 5: Writing output files...[/bold]")
@@ -1423,16 +1476,8 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
         # Write timeline
         timeline_path = output_path / "timeline.md"
         if use_hierarchical:
-            timeline_content = generate_hierarchical_timeline(
-                phases,
-                repo_name=repo_name,
-                backend=backend,
-                model=model,
-                api_key=api_key,
-                ollama_url=ollama_url,
-            )
             timeline_path.parent.mkdir(parents=True, exist_ok=True)
-            timeline_path.write_text(timeline_content)
+            timeline_path.write_text(stories['timeline'])
         else:
             OutputWriter.write_simple_timeline(phases, str(timeline_path))
         console.print(f"[green]Wrote {timeline_path}[/green]\n")
