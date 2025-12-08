@@ -244,6 +244,15 @@ Write the narrative now:"""
         with open(summary_file, 'w') as f:
             json.dump(result, f, indent=2)
 
+    def _save_phase_with_summary(self, phase: Phase, output_dir: str):
+        """Persist phase data with generated summary."""
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        phase_file = output_path / f"phase_{phase.phase_number:02d}.json"
+        with open(phase_file, 'w') as f:
+            json.dump(phase.to_dict(), f, indent=2)
+
 
 def summarize_phases_hierarchical(phases: List[Phase],
                                   output_dir: str = "output/phases",
