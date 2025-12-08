@@ -102,8 +102,9 @@ class HierarchicalPhaseSummarizer:
     def _summarize_cluster(self, cluster: CommitCluster) -> str:
         """Generate concise summary for a commit cluster."""
         details = self.analyzer.extract_significant_details(cluster)
+        signals = self._build_cluster_signals(cluster)
 
-        prompt = f"""Summarize this group of related commits in 1-2 sentences.
+        prompt = f"""You are a senior software architect performing a forensic review of this commit cluster. Provide an analytical breakdown, not a story.
 
 **Cluster Type:** {cluster.cluster_type}
 **Commits:** {len(cluster.commits)}
@@ -132,13 +133,18 @@ class HierarchicalPhaseSummarizer:
             for c in details['all_commits']:
                 prompt += f"- {c['hash']}: {c['message']}\n"
 
-        prompt += """
-Write a 1-2 sentence summary that:
-1. Describes WHAT was changed
-2. Explains WHY (based on PR description or commit message)
-3. Mentions key files if relevant
+        if signals:
+            prompt += "\n**Structural Signals:**\n"
+            for signal in signals:
+                prompt += f"- {signal}\n"
 
-Focus on the significance and purpose, not just listing commits."""
+        prompt += """
+Produce a 3-part investigation:
+- **Facts:** Concisely state the concrete changes (files touched, scale, notable additions/removals).
+- **Interpretation:** Infer the intent and problem being solved; connect commits to an underlying strategy.
+- **Implications:** Call out risks, technical debt, or architectural shifts exposed by this cluster.
+
+Keep the response tight (3-4 sentences total) and make the analysis explicit. Avoid storytelling language."""
 
         messages = [LLMMessage(role="user", content=prompt)]
         response = self.router.generate(messages, max_tokens=200)
@@ -148,13 +154,18 @@ Focus on the significance and purpose, not just listing commits."""
     def _generate_phase_narrative(self, phase: Phase,
                                   clusters: List[CommitCluster]) -> str:
         """Generate complete narrative for the phase."""
-        prompt = f"""Write a narrative summary of this development phase.
+        structural_signals = self._build_structural_signals(clusters)
+
+        prompt = f"""Analyze this development phase like a forensic architecture review.
 
 **Phase Overview:**
 - Time Period: {phase.start_date[:10]} to {phase.end_date[:10]}
 - Total Commits: {phase.commit_count}
 - LOC Change: {phase.loc_delta:+,d} ({phase.loc_delta_percent:+.1f}%)
 - Authors: {', '.join(phase.authors)}
+
+**Structural Signals:**
+{structural_signals}
 
 **Development Activities (grouped by purpose):**
 """
@@ -172,15 +183,14 @@ Focus on the significance and purpose, not just listing commits."""
 
         prompt += """
 **Your Task:**
-Write a 2-3 paragraph narrative that:
-1. Describes the main themes and objectives of this phase
-2. Explains the major changes and their purpose
-3. Connects the activities into a coherent story
-4. Highlights any significant technical decisions
+Deliver a 3-layer investigative report:
+1. **Facts:** Key themes, structural movements, and high-churn areas revealed by the clusters.
+2. **Interpretation:** The inferred objectives, problem-solving tactics, and architectural direction.
+3. **Implications:** Risk surfaces, debt tradeoffs, and downstream consequences for maintainability or stability.
 
-Use the cluster summaries above as source material. Focus on the "why" and "what changed" rather than listing every commit.
+Use the cluster summaries and structural signals as evidence. Be direct and analytical—avoid storytelling language.
 
-Write the narrative now:"""
+Write the investigation now:"""
 
         messages = [LLMMessage(role="user", content=prompt)]
         response = self.router.generate(messages, max_tokens=800)
@@ -233,6 +243,59 @@ Write the narrative now:"""
             'loc_delta': phase.loc_delta,
             'loc_delta_percent': phase.loc_delta_percent,
         }
+
+    def _build_structural_signals(self, clusters: List[CommitCluster]) -> str:
+        """Build structural signals to guide investigative summaries."""
+        top_files: Dict[str, int] = {}
+        risk_flags: List[str] = []
+
+        for cluster in clusters:
+            for path, count in cluster.file_changes.items():
+                top_files[path] = top_files.get(path, 0) + count
+
+            change_volume = cluster.total_insertions + cluster.total_deletions
+            if change_volume >= 1500:
+                risk_flags.append(
+                    f"Cluster '{cluster.cluster_type}' has heavy churn (+{cluster.total_insertions}/-{cluster.total_deletions})."
+                )
+            if cluster.total_deletions > cluster.total_insertions * 1.5 and cluster.total_deletions > 300:
+                risk_flags.append(
+                    f"Cluster '{cluster.cluster_type}' is deletion-heavy, suggesting removals or rewrites."
+                )
+
+        sorted_files = sorted(top_files.items(), key=lambda x: x[1], reverse=True)[:5]
+        file_signal = (
+            "High-churn files: " + ", ".join(f"{path} (x{count})" for path, count in sorted_files)
+            if sorted_files else "No concentrated file churn detected."
+        )
+
+        if not risk_flags:
+            risk_flags.append("No major risk flags detected from volume heuristics.")
+
+        return "\n".join([f"- {file_signal}"] + [f"- {flag}" for flag in risk_flags])
+
+    def _build_cluster_signals(self, cluster: CommitCluster) -> List[str]:
+        """Derive cluster-level signals for deeper analysis."""
+        signals = []
+        change_volume = cluster.total_insertions + cluster.total_deletions
+
+        if change_volume >= 800:
+            signals.append(
+                f"Large change volume: +{cluster.total_insertions}/-{cluster.total_deletions} lines indicates significant movement."
+            )
+        if cluster.total_deletions > cluster.total_insertions * 1.5 and cluster.total_deletions > 200:
+            signals.append("Deletion-heavy changes hint at removals, reversions, or major rewrites.")
+
+        top_files = sorted(cluster.file_changes.items(), key=lambda x: x[1], reverse=True)[:3]
+        if top_files:
+            signals.append(
+                "High-churn files: " + ", ".join(f"{path} (x{count})" for path, count in top_files)
+            )
+
+        if not signals:
+            signals.append("No anomalous churn detected beyond routine changes.")
+
+        return signals
 
     def _save_phase_summary(self, phase: Phase, result: Dict[str, Any],
                            output_dir: str):
