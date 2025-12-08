@@ -21,7 +21,7 @@ class LLMBackend(str, Enum):
 class LLMRouter:
     """Routes LLM requests to appropriate backend."""
 
-    # Default models for each backend
+    # Default models for each backend, be aware of cost
     DEFAULT_MODELS = {
         LLMBackend.ANTHROPIC: "claude-sonnet-4-5-20250929",
         LLMBackend.OPENAI: "gpt-4o-mini",
