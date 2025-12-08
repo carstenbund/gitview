@@ -261,7 +261,7 @@ class AnalysisPipeline:
 
         # Calculate average message length
         if context.records:
-            avg_msg_length = sum(len(r.message) for r in context.records) // len(context.records)
+            avg_msg_length = sum(len(r.commit_message) for r in context.records) // len(context.records)
         else:
             avg_msg_length = 100
 
