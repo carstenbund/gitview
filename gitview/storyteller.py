@@ -1,6 +1,8 @@
 """Generate global narrative from phase summaries."""
 
 import os
+import json
+import hashlib
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -38,13 +40,15 @@ class StoryTeller:
         self.max_phases_per_prompt = max_phases_per_prompt
 
     def generate_global_story(self, phases: List[Phase],
-                             repo_name: Optional[str] = None) -> Dict[str, str]:
+                             repo_name: Optional[str] = None,
+                             cache_dir: Optional[str] = None) -> Dict[str, str]:
         """
         Generate comprehensive repository story from phases.
 
         Args:
             phases: List of Phase objects with summaries
             repo_name: Optional repository name
+            cache_dir: Optional directory to cache story (avoids regeneration if phases unchanged)
 
         Returns:
             Dict with different story sections:
@@ -57,6 +61,13 @@ class StoryTeller:
         # Ensure all phases have summaries
         if any(p.summary is None for p in phases):
             raise ValueError("All phases must have summaries before generating global story")
+
+        # Try to load cached story if available
+        if cache_dir:
+            cached_story = self._load_cached_story(phases, cache_dir)
+            if cached_story:
+                print("✓ Using cached story (phases unchanged since last generation)")
+                return cached_story
 
         print("Generating global story...")
 
@@ -88,6 +99,10 @@ class StoryTeller:
         stories['full_narrative'] = self._generate_full_narrative(
             phase_summaries, repo_name
         )
+
+        # Cache the generated story for future runs
+        if cache_dir:
+            self._save_story_cache(phases, stories, cache_dir)
 
         return stories
 
@@ -177,6 +192,72 @@ class StoryTeller:
             summaries.append(phase_data)
 
         return summaries
+
+    def _hash_phases(self, phases: List[Phase]) -> str:
+        """
+        Generate a hash of phase summaries to detect changes.
+
+        Returns a hash string that changes only when phase summaries change.
+        """
+        # Create a deterministic representation of phases
+        phase_fingerprint = []
+        for phase in phases:
+            phase_fingerprint.append({
+                'phase_number': phase.phase_number,
+                'commit_count': phase.commit_count,
+                'summary': phase.summary,
+                'loc_delta': phase.loc_delta,
+            })
+
+        # Convert to JSON and hash
+        fingerprint_str = json.dumps(phase_fingerprint, sort_keys=True)
+        return hashlib.sha256(fingerprint_str.encode()).hexdigest()
+
+    def _get_story_cache_path(self, cache_dir: str) -> Path:
+        """Get the path to the story cache file."""
+        return Path(cache_dir) / "cached_story.json"
+
+    def _load_cached_story(self, phases: List[Phase], cache_dir: str) -> Optional[Dict[str, str]]:
+        """
+        Load cached story if phases haven't changed.
+
+        Returns cached story dict or None if cache is invalid/missing.
+        """
+        cache_path = self._get_story_cache_path(cache_dir)
+
+        if not cache_path.exists():
+            return None
+
+        try:
+            with open(cache_path, 'r') as f:
+                cached_data = json.load(f)
+
+            # Check if phase hash matches
+            current_hash = self._hash_phases(phases)
+            cached_hash = cached_data.get('phase_hash')
+
+            if current_hash == cached_hash:
+                return cached_data.get('stories')
+
+        except Exception as e:
+            # Cache corrupted or invalid, ignore and regenerate
+            print(f"  (Cache invalid: {e})")
+
+        return None
+
+    def _save_story_cache(self, phases: List[Phase], stories: Dict[str, str], cache_dir: str):
+        """Save generated story to cache with phase hash."""
+        cache_path = self._get_story_cache_path(cache_dir)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cache_data = {
+            'phase_hash': self._hash_phases(phases),
+            'generated_at': datetime.now().isoformat(),
+            'stories': stories
+        }
+
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f, indent=2)
 
     def _chunk_phase_summaries(
         self, phase_summaries: List[Dict[str, Any]]
