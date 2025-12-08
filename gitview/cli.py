@@ -151,6 +151,9 @@ EXAMPLES:
   # Adaptive chunking (default, splits on significant changes)
   gitview analyze --strategy adaptive
 
+  # Semantic chunking (clusters commits by topic before phasing)
+  gitview analyze --strategy semantic
+
   # Fixed-size chunks (50 commits per phase)
   gitview analyze --strategy fixed --chunk-size 50
 
@@ -658,10 +661,11 @@ def _analyze_single_branch(
               help="Repository: local path, GitHub shortcut (org/repo), or full URL")
 @click.option('--output', '-o', default=None,
               help="Output directory (default: auto-generated based on repo)")
-@click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive']),
+@click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive', 'semantic']),
               default='adaptive',
               help="Chunking strategy: 'adaptive' (default, splits on significant changes), "
-                   "'fixed' (N commits per phase), 'time' (by time period)")
+                   "'semantic' (clusters by meaning), 'fixed' (N commits per phase), "
+                   "'time' (by time period)")
 @click.option('--chunk-size', type=int, default=50,
               help="Commits per chunk when using 'fixed' strategy")
 @click.option('--max-commits', type=int,
@@ -1143,6 +1147,10 @@ CHUNKING STRATEGIES:
 3. Time:
    Split by time periods (week, month, quarter, year)
 
+4. Semantic:
+   Cluster commits by meaning (PR, intent, files) and group adjacent clusters
+   into coherent phases. Ideal when feature/refactor tracks are interleaved.
+
 \b
 EXAMPLES:
 
@@ -1165,9 +1173,9 @@ EXAMPLES:
 @click.argument('history_file', type=click.Path(exists=True))
 @click.option('--output', '-o', default="output/phases",
               help="Output directory for phase JSON files")
-@click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive']),
+@click.option('--strategy', '-s', type=click.Choice(['fixed', 'time', 'adaptive', 'semantic']),
               default='adaptive',
-              help="Chunking strategy: 'adaptive' (default), 'fixed', 'time'")
+              help="Chunking strategy: 'adaptive' (default), 'semantic' (cluster-based), 'fixed', 'time'")
 @click.option('--chunk-size', type=int, default=50,
               help="Commits per chunk when using 'fixed' strategy")
 def chunk(history_file, output, strategy, chunk_size):

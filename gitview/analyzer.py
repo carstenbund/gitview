@@ -32,7 +32,7 @@ class AnalysisConfig:
     since_date: Optional[str] = None
 
     # Chunking strategy
-    strategy: str = "adaptive"  # 'fixed', 'time', 'adaptive'
+    strategy: str = "adaptive"  # 'fixed', 'time', 'adaptive', 'semantic'
     chunk_size: int = 50
 
     # LLM configuration
@@ -143,7 +143,7 @@ class AnalysisConfig:
         if not (self.repo_path / '.git').exists():
             raise ValueError(f"Not a git repository: {self.repo_path}")
 
-        if self.strategy not in ('fixed', 'time', 'adaptive'):
+        if self.strategy not in ('fixed', 'time', 'adaptive', 'semantic'):
             raise ValueError(f"Invalid strategy: {self.strategy}")
 
         if self.summarization_strategy not in ('simple', 'hierarchical'):

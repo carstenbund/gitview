@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 
 from .extractor import CommitRecord
+from .significance_analyzer import SignificanceAnalyzer, CommitCluster
 
 
 @dataclass
@@ -72,7 +73,7 @@ class HistoryChunker:
         Initialize chunker with strategy.
 
         Args:
-            strategy: 'fixed', 'time', or 'adaptive'
+            strategy: 'fixed', 'time', 'adaptive', or 'semantic'
         """
         self.strategy = strategy
 
@@ -93,6 +94,8 @@ class HistoryChunker:
             return self._chunk_time(records, kwargs.get('period', 'quarter'))
         elif self.strategy == "adaptive":
             return self._chunk_adaptive(records, kwargs)
+        elif self.strategy == "semantic":
+            return self._chunk_semantic(records, kwargs)
         else:
             raise ValueError(f"Unknown strategy: {self.strategy}")
 
@@ -239,6 +242,138 @@ class HistoryChunker:
             phases.append(phase)
 
         return phases
+
+    def _chunk_semantic(self, records: List[CommitRecord], config: Dict[str, Any]) -> List[Phase]:
+        """Chunk commits into phases using semantic clustering.
+
+        This uses the significance analyzer's semantic clustering to group
+        consecutive clusters that share topic, file overlap, or PR lineage
+        into phases. The intent is to align phase boundaries with meaningful
+        workstreams rather than raw commit counts or LOC swings.
+
+        Configurable knobs:
+            semantic_threshold: Minimum affinity score to keep clusters in the
+                same phase (default: 1)
+            max_clusters_per_phase: Hard limit on clusters per phase to avoid
+                overly large groupings (default: 6)
+            max_gap_days: Split when clusters are separated by long time gaps
+                (default: 30)
+        """
+        if not records:
+            return []
+
+        analyzer = SignificanceAnalyzer()
+        clusters = analyzer.cluster_commits(records)
+
+        if not clusters:
+            return []
+
+        phases: List[Phase] = []
+        current_clusters: List[CommitCluster] = [clusters[0]]
+
+        semantic_threshold = config.get('semantic_threshold', 1)
+        max_clusters_per_phase = config.get('max_clusters_per_phase', 6)
+        max_gap_days = config.get('max_gap_days', 30)
+
+        for cluster in clusters[1:]:
+            last_cluster = current_clusters[-1]
+
+            if self._should_split_cluster(
+                last_cluster,
+                cluster,
+                current_clusters,
+                semantic_threshold,
+                max_clusters_per_phase,
+                max_gap_days,
+            ):
+                phase_commits = [c for cl in current_clusters for c in cl.commits]
+                phase = self._create_phase(len(phases) + 1, phase_commits)
+                phases.append(phase)
+                current_clusters = [cluster]
+            else:
+                current_clusters.append(cluster)
+
+        if current_clusters:
+            phase_commits = [c for cl in current_clusters for c in cl.commits]
+            phase = self._create_phase(len(phases) + 1, phase_commits)
+            phases.append(phase)
+
+        return phases
+
+    def _should_split_cluster(
+        self,
+        previous: CommitCluster,
+        current: CommitCluster,
+        clusters_in_phase: List[CommitCluster],
+        threshold: int,
+        max_clusters_per_phase: int,
+        max_gap_days: int,
+    ) -> bool:
+        """Determine whether to start a new phase before `current`.
+
+        A split occurs when semantic affinity is low, when too many clusters
+        have accumulated, or when a large temporal gap appears between
+        clusters.
+        """
+        if len(clusters_in_phase) >= max_clusters_per_phase:
+            return True
+
+        gap_days = self._cluster_gap_in_days(previous, current)
+        if gap_days is not None and gap_days > max_gap_days:
+            return True
+
+        affinity = 0
+
+        if previous.cluster_type == current.cluster_type:
+            affinity += 1
+
+        if self._clusters_share_pr(previous, current):
+            affinity += 2
+
+        overlap = self._file_overlap(previous, current)
+        if overlap >= 0.25:
+            affinity += 1
+
+        return affinity < threshold
+
+    @staticmethod
+    def _cluster_gap_in_days(previous: CommitCluster, current: CommitCluster) -> Optional[int]:
+        """Calculate days between the last commit of previous and first of current."""
+        try:
+            prev_time = datetime.fromisoformat(previous.commits[-1].timestamp)
+            current_time = datetime.fromisoformat(current.commits[0].timestamp)
+        except Exception:
+            return None
+
+        return (current_time - prev_time).days
+
+    @staticmethod
+    def _clusters_share_pr(first: CommitCluster, second: CommitCluster) -> bool:
+        """Check if clusters share PR lineage via PR numbers."""
+        first_prs = {
+            c.get_pr_number()
+            for c in first.commits
+            if c.has_github_context() and c.get_pr_number() is not None
+        }
+        second_prs = {
+            c.get_pr_number()
+            for c in second.commits
+            if c.has_github_context() and c.get_pr_number() is not None
+        }
+
+        return bool(first_prs and second_prs and first_prs.intersection(second_prs))
+
+    @staticmethod
+    def _file_overlap(first: CommitCluster, second: CommitCluster) -> float:
+        """Calculate normalized file path overlap between two clusters."""
+        first_files = set(first.file_changes.keys())
+        second_files = set(second.file_changes.keys())
+
+        if not first_files or not second_files:
+            return 0.0
+
+        shared = len(first_files.intersection(second_files))
+        return shared / min(len(first_files), len(second_files))
 
     def _create_phase(self, phase_number: int, commits: List[CommitRecord]) -> Phase:
         """Create a Phase object from a list of commits."""
