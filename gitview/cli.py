@@ -92,22 +92,22 @@ LLM BACKEND CONFIGURATION:
 GitView supports three LLM backends:
 
 \b
-1. Anthropic Claude (default, requires API key):
-   export ANTHROPIC_API_KEY="your-key"
+1. OpenAI GPT (default for cost efficiency, requires API key):
+   export OPENAI_API_KEY="your-key"
    gitview analyze
 
-   Or: gitview analyze --backend anthropic --api-key "your-key"
+   Or: gitview analyze --backend openai --api-key "your-key"
 
-   Default model: claude-sonnet-4-5-20250929
-   Other models: claude-3-opus-20240229, claude-3-haiku-20240307
+   Default model: gpt-4o-mini (most cost-effective, ~$0.15-0.60 per 1000 commits)
+   Other models: gpt-4o, gpt-4-turbo-preview
 
 \b
-2. OpenAI GPT (requires API key):
-   export OPENAI_API_KEY="your-key"
-   gitview analyze --backend openai
+2. Anthropic Claude (premium quality, requires API key):
+   export ANTHROPIC_API_KEY="your-key"
+   gitview analyze --backend anthropic
 
-   Default model: gpt-4
-   Other models: gpt-4-turbo-preview, gpt-3.5-turbo
+   Default model: claude-sonnet-4-5-20250929 (~$2-10 per 1000 commits)
+   Budget option: claude-haiku-3-5-20241022 (~$0.20-1.00 per 1000 commits)
 
 \b
 3. Ollama (local, FREE, no API key needed):
@@ -119,11 +119,11 @@ GitView supports three LLM backends:
    Default URL: http://localhost:11434
 
 \b
-Backend auto-detection:
+Backend auto-detection (cost-optimized priority):
   If no --backend is specified, GitView checks environment variables:
-  - If ANTHROPIC_API_KEY is set -> uses Anthropic
-  - If OPENAI_API_KEY is set -> uses OpenAI
-  - Otherwise -> uses Ollama (local)
+  - If OPENAI_API_KEY is set -> uses OpenAI (most cost-effective)
+  - If ANTHROPIC_API_KEY is set -> uses Anthropic (premium quality)
+  - Otherwise -> uses Ollama (local, free)
 
 \b
 EXAMPLES:
@@ -157,10 +157,28 @@ EXAMPLES:
   gitview analyze --backend ollama --ollama-url http://192.168.1.100:11434
 
 \b
-INCREMENTAL ANALYSIS (Cost-Efficient Ongoing Monitoring):
+SMART CACHING & COST OPTIMIZATION:
 
-  For managers analyzing multiple projects on an ongoing basis, incremental
-  analysis dramatically reduces costs by reusing previous LLM summaries.
+  GitView now includes intelligent caching to minimize LLM costs:
+
+  1. AUTO-INCREMENTAL MODE (NEW):
+     When you re-run analysis on a repo, GitView automatically detects cached
+     data and only analyzes NEW commits. This is perfect for daily/weekly usage
+     across multiple projects.
+
+     First run:  gitview analyze              # Analyzes all history (~$0.50-2.00)
+     Second run: gitview analyze              # Auto-incremental, only new commits (~$0.05-0.15)
+
+  2. STORY CACHING:
+     Generated narratives are cached. If phase summaries haven't changed,
+     story generation is skipped entirely (saves ~$0.10-0.50 per run).
+
+  3. COST ESTIMATION:
+     Before starting analysis, GitView shows estimated cost and suggests
+     cheaper alternatives if cost is high.
+
+  For managers analyzing multiple projects on an ongoing basis, these features
+  dramatically reduce costs by reusing previous LLM work.
 
   # Initial full analysis
   gitview analyze --output reports/myproject
@@ -257,6 +275,70 @@ GITHUB ENRICHMENT (PR & Review Context):
 """
 
 
+def _estimate_analysis_cost(commit_count: int, avg_msg_length: int, backend: str, model: str) -> dict:
+    """
+    Estimate LLM API cost before analysis.
+
+    Args:
+        commit_count: Number of commits to analyze
+        avg_msg_length: Average commit message length in characters
+        backend: LLM backend name
+        model: Model name
+
+    Returns:
+        Dict with cost_usd (estimated cost), num_phases, and explanation
+    """
+    # Estimate number of phases (adaptive strategy default: 5-60 commits per phase)
+    avg_commits_per_phase = 40
+    num_phases = max(1, commit_count // avg_commits_per_phase)
+
+    # Estimate tokens per phase summarization
+    # Base: commit metadata (hash, author, date) ~50 tokens per commit
+    # Message content varies significantly
+    tokens_per_commit = 50 + (avg_msg_length // 4)  # ~4 chars per token
+    commits_shown_per_phase = min(20, commit_count // num_phases)  # First 20 commits shown
+
+    input_tokens_per_phase = commits_shown_per_phase * tokens_per_commit + 500  # +500 for prompt
+    output_tokens_per_phase = 600  # Phase summaries are ~400-600 tokens
+
+    phase_summarization_input = num_phases * input_tokens_per_phase
+    phase_summarization_output = num_phases * output_tokens_per_phase
+
+    # Estimate story generation tokens (5 sections)
+    story_input_tokens = num_phases * 400 + 2000  # Truncated phase summaries + prompts
+    story_output_tokens = 10000  # Total across 5 sections
+
+    total_input_tokens = phase_summarization_input + story_input_tokens
+    total_output_tokens = phase_summarization_output + story_output_tokens
+
+    # Cost per million tokens (as of 2025)
+    cost_table = {
+        ('openai', 'gpt-4o-mini'): (0.150, 0.600),
+        ('openai', 'gpt-4o'): (2.50, 10.00),
+        ('anthropic', 'claude-sonnet-4-5-20250929'): (3.00, 15.00),
+        ('anthropic', 'claude-sonnet-3-5-20240229'): (3.00, 15.00),
+        ('anthropic', 'claude-haiku-3-5-20241022'): (0.25, 1.25),
+        ('ollama', None): (0, 0),  # Local, free
+    }
+
+    # Find matching cost
+    input_cost_per_m, output_cost_per_m = cost_table.get((backend, model), (1.0, 5.0))
+
+    estimated_cost = (
+        (total_input_tokens / 1_000_000) * input_cost_per_m +
+        (total_output_tokens / 1_000_000) * output_cost_per_m
+    )
+
+    return {
+        'cost_usd': estimated_cost,
+        'num_phases': num_phases,
+        'input_tokens': total_input_tokens,
+        'output_tokens': total_output_tokens,
+        'backend': backend,
+        'model': model
+    }
+
+
 def _load_cached_analysis(output_dir: str):
     """Load cached commit history and phases if available."""
 
@@ -312,15 +394,40 @@ def _analyze_single_branch(
     starting_loc = 0
     cached_records = None
     cached_phases = None
+    auto_incremental = False
+
+    # Smart incremental-by-default: if cache exists and user didn't specify otherwise,
+    # automatically enable incremental mode to save costs
+    if not incremental and not since_commit and not since_date:
+        cached_records, cached_phases = _load_cached_analysis(output)
+        if cached_records and cached_phases:
+            previous_analysis = OutputWriter.load_previous_analysis(output)
+            if previous_analysis:
+                # Automatically enable incremental mode
+                auto_incremental = True
+                incremental = True
+                metadata = previous_analysis.get('metadata', {})
+                since_commit = metadata.get('last_commit_hash')
+                console.print(f"[cyan]Smart cache detected:[/cyan] Auto-enabling incremental mode to save costs")
+                console.print(f"[cyan]Analyzing commits since:[/cyan] {since_commit[:8] if since_commit else 'last analysis'}")
+                console.print(f"[cyan]Last analysis:[/cyan] {metadata.get('generated_at', 'unknown')}\n")
 
     if incremental or since_commit or since_date:
-        # Load previous analysis
-        previous_analysis = OutputWriter.load_previous_analysis(output)
+        # Load previous analysis if not already loaded
+        if not previous_analysis:
+            previous_analysis = OutputWriter.load_previous_analysis(output)
 
         if incremental and not previous_analysis:
-            console.print("[yellow]Warning: --incremental specified but no previous analysis found.[/yellow]")
-            console.print("[yellow]Running full analysis instead...[/yellow]\n")
-            incremental = False
+            if auto_incremental:
+                # Auto-incremental failed, fall back to full analysis
+                console.print("[yellow]Cache exists but incomplete. Running full analysis...[/yellow]\n")
+                incremental = False
+                auto_incremental = False
+                since_commit = None
+            else:
+                console.print("[yellow]Warning: --incremental specified but no previous analysis found.[/yellow]")
+                console.print("[yellow]Running full analysis instead...[/yellow]\n")
+                incremental = False
         elif previous_analysis:
             metadata = previous_analysis.get('metadata', {})
             last_hash = metadata.get('last_commit_hash')
@@ -338,7 +445,8 @@ def _analyze_single_branch(
             if existing_phases and existing_phases[-1].commits:
                 starting_loc = existing_phases[-1].commits[-1].loc_total
 
-    if not since_commit and not since_date:
+    # Load cached data if not already loaded by auto-incremental logic
+    if not since_commit and not since_date and not auto_incremental:
         cached_records, cached_phases = _load_cached_analysis(output)
 
     # Step 1: Extract git history
@@ -492,6 +600,37 @@ def _analyze_single_branch(
         console.print(f"[green]Wrote timeline to {timeline_file}[/green]\n")
         return
 
+    # Estimate cost before running LLM analysis
+    # Calculate average commit message length
+    avg_msg_length = sum(len(r.message) for r in records) // max(1, len(records))
+
+    # Determine which backend/model will be used
+    from .backends.router import LLMRouter
+    router_for_estimate = LLMRouter(backend=backend, model=model, api_key=api_key)
+    estimate = _estimate_analysis_cost(
+        commit_count=len(records),
+        avg_msg_length=avg_msg_length,
+        backend=router_for_estimate.backend_type.value,
+        model=router_for_estimate.model
+    )
+
+    # Show cost estimate
+    if estimate['cost_usd'] > 0:
+        console.print(f"\n[bold]Cost Estimate:[/bold]")
+        console.print(f"  Backend: {estimate['backend']} / {estimate['model']}")
+        console.print(f"  Estimated tokens: ~{estimate['input_tokens']:,} input + ~{estimate['output_tokens']:,} output")
+        console.print(f"  Estimated cost: [yellow]${estimate['cost_usd']:.2f}[/yellow]")
+        console.print(f"  ({estimate['num_phases']} phases to summarize + story generation)")
+
+        # Suggest alternatives if cost is high
+        if estimate['cost_usd'] > 2.0:
+            console.print(f"\n[cyan]💡 To reduce costs:[/cyan]")
+            if estimate['backend'] == 'anthropic':
+                console.print(f"  • Use OpenAI gpt-4o-mini: --backend openai (~4-10x cheaper)")
+            console.print(f"  • Use larger chunks: --strategy fixed --chunk-size 100")
+            console.print(f"  • Limit commits: --max-commits 500")
+        console.print()
+
     # Step 3: Summarize phases with LLM
     console.print("[bold]Step 3: Summarizing phases with LLM...[/bold]")
     summarizer = PhaseSummarizer(
@@ -561,7 +700,7 @@ def _analyze_single_branch(
         console=console
     ) as progress:
         task = progress.add_task("Generating story...", total=None)
-        stories = storyteller.generate_global_story(phases, repo_name)
+        stories = storyteller.generate_global_story(phases, repo_name, cache_dir=output)
         progress.update(task, completed=True)
 
     console.print(f"[green]Generated global narrative[/green]\n")

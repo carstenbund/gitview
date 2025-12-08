@@ -44,10 +44,11 @@ class LLMRouter:
             self.backend_type = LLMBackend(backend.lower())
         else:
             # Auto-detect from environment
-            if os.environ.get('ANTHROPIC_API_KEY'):
-                self.backend_type = LLMBackend.ANTHROPIC
-            elif os.environ.get('OPENAI_API_KEY'):
+            # Prefer OpenAI (gpt-4o-mini) for cost efficiency, then Anthropic, then Ollama
+            if os.environ.get('OPENAI_API_KEY'):
                 self.backend_type = LLMBackend.OPENAI
+            elif os.environ.get('ANTHROPIC_API_KEY'):
+                self.backend_type = LLMBackend.ANTHROPIC
             else:
                 self.backend_type = LLMBackend.OLLAMA
 
