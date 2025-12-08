@@ -41,11 +41,25 @@ class SummarizerHandler(BaseHandler):
         self._log_bold("Step 3: Summarizing phases with LLM...")
 
         try:
+            # Determine if using hierarchical mode
+            use_hierarchical = self.config.summarization_strategy == 'hierarchical'
+
+            if use_hierarchical:
+                self._log_info("Using hierarchical summarization strategy")
+                self._log_warning("Note: This makes more API calls but preserves more details\n")
+
             # 1. Initialize summarizer
-            summarizer = self._create_summarizer()
+            summarizer = self._create_summarizer(use_hierarchical)
 
             # 2. Identify phases needing summarization
-            phases_to_summarize = [p for p in context.phases if p.summary is None]
+            if use_hierarchical:
+                # Check for hierarchical_summary metadata
+                phases_to_summarize = [
+                    p for p in context.phases
+                    if p.summary is None or not getattr(p, 'metadata', {}).get('hierarchical_summary')
+                ]
+            else:
+                phases_to_summarize = [p for p in context.phases if p.summary is None]
 
             if len(phases_to_summarize) < len(context.phases):
                 self._log_info(
@@ -54,7 +68,7 @@ class SummarizerHandler(BaseHandler):
                 )
 
             # 3. Summarize phases
-            self._summarize_phases(context, summarizer, phases_to_summarize)
+            self._summarize_phases(context, summarizer, phases_to_summarize, use_hierarchical)
 
             # 4. Display summary
             if len(phases_to_summarize) > 0:
@@ -67,37 +81,54 @@ class SummarizerHandler(BaseHandler):
         except Exception as e:
             raise HandlerError(f"Failed to summarize phases: {e}") from e
 
-    def _create_summarizer(self):
-        """Create and configure PhaseSummarizer.
+    def _create_summarizer(self, use_hierarchical: bool):
+        """Create and configure PhaseSummarizer or HierarchicalPhaseSummarizer.
+
+        Args:
+            use_hierarchical: Whether to use hierarchical summarization
 
         Returns:
-            Configured PhaseSummarizer instance
+            Configured summarizer instance
         """
-        from ..summarizer import PhaseSummarizer
+        if use_hierarchical:
+            from ..hierarchical_summarizer import HierarchicalPhaseSummarizer
 
-        return PhaseSummarizer(
-            backend=self.config.backend,
-            model=self.config.model,
-            api_key=self.config.api_key,
-            ollama_url=self.config.ollama_url,
-            todo_content=self.config.todo_content,
-            critical_mode=self.config.critical_mode,
-            directives=self.config.directives
-        )
+            return HierarchicalPhaseSummarizer(
+                backend=self.config.backend,
+                model=self.config.model,
+                api_key=self.config.api_key,
+                ollama_url=self.config.ollama_url,
+            )
+        else:
+            from ..summarizer import PhaseSummarizer
+
+            return PhaseSummarizer(
+                backend=self.config.backend,
+                model=self.config.model,
+                api_key=self.config.api_key,
+                ollama_url=self.config.ollama_url,
+                todo_content=self.config.todo_content,
+                critical_mode=self.config.critical_mode,
+                directives=self.config.directives
+            )
 
     def _summarize_phases(
         self,
         context: AnalysisContext,
         summarizer,
-        phases_to_summarize: list
+        phases_to_summarize: list,
+        use_hierarchical: bool
     ) -> None:
         """Summarize all phases, reusing existing summaries.
 
         Args:
             context: Analysis context with phases
-            summarizer: Configured PhaseSummarizer
+            summarizer: Configured summarizer instance
             phases_to_summarize: List of phases needing summarization
+            use_hierarchical: Whether using hierarchical mode
         """
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -117,10 +148,20 @@ class SummarizerHandler(BaseHandler):
                 )
 
                 if phase.summary is None:
-                    # Summarize this phase
-                    context_str = summarizer._build_context(previous_summaries)
-                    summary = summarizer.summarize_phase(phase, context_str)
-                    phase.summary = summary
+                    if use_hierarchical:
+                        # Hierarchical summarizer returns dict with 'full_summary'
+                        result = summarizer.summarize_phase(phase)
+                        phase.summary = result['full_summary']
+                        # Store metadata to indicate hierarchical summary
+                        if not hasattr(phase, 'metadata'):
+                            phase.metadata = {}
+                        phase.metadata['hierarchical_summary'] = True
+                    else:
+                        # Simple summarizer needs context
+                        context_str = summarizer._build_context(previous_summaries)
+                        summary = summarizer.summarize_phase(phase, context_str)
+                        phase.summary = summary
+
                     progress.update(task, advance=1)
 
                 # Build context for next phase

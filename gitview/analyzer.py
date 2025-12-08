@@ -41,6 +41,7 @@ class AnalysisConfig:
     model: Optional[str] = None
     api_key: Optional[str] = None
     ollama_url: str = "http://localhost:11434"
+    summarization_strategy: str = "simple"  # 'simple' or 'hierarchical'
 
     # Critical mode
     critical_mode: bool = False
@@ -66,6 +67,7 @@ class AnalysisConfig:
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         ollama_url: str = "http://localhost:11434",
+        summarization_strategy: str = "simple",
         incremental: bool = False,
         since_commit: Optional[str] = None,
         since_date: Optional[str] = None,
@@ -115,6 +117,7 @@ class AnalysisConfig:
             model=model,
             api_key=api_key,
             ollama_url=ollama_url,
+            summarization_strategy=summarization_strategy,
             incremental=incremental,
             since_commit=since_commit,
             since_date=since_date,
@@ -142,6 +145,9 @@ class AnalysisConfig:
 
         if self.strategy not in ('fixed', 'time', 'adaptive'):
             raise ValueError(f"Invalid strategy: {self.strategy}")
+
+        if self.summarization_strategy not in ('simple', 'hierarchical'):
+            raise ValueError(f"Invalid summarization_strategy: {self.summarization_strategy}")
 
 
 @dataclass

@@ -40,56 +40,95 @@ class StorytellerHandler(BaseHandler):
         self._log_bold("Step 4: Generating global narrative...")
 
         try:
+            # Determine if using hierarchical mode
+            use_hierarchical = self.config.summarization_strategy == 'hierarchical'
+
             # 1. Create storyteller
-            storyteller = self._create_storyteller()
+            storyteller = self._create_storyteller(use_hierarchical)
 
             # 2. Generate stories
-            context.stories = self._generate_stories(context, storyteller)
+            context.stories = self._generate_stories(context, storyteller, use_hierarchical)
 
-            self._log_success("Generated global narrative\n")
+            if use_hierarchical:
+                self._log_success("Generated hierarchical timeline\n")
+            else:
+                self._log_success("Generated global narrative\n")
 
         except Exception as e:
             raise HandlerError(f"Failed to generate global narrative: {e}") from e
 
-    def _create_storyteller(self):
-        """Create and configure StoryTeller.
+    def _create_storyteller(self, use_hierarchical: bool):
+        """Create and configure StoryTeller or HierarchicalStoryTeller.
+
+        Args:
+            use_hierarchical: Whether to use hierarchical mode
 
         Returns:
-            Configured StoryTeller instance
+            Configured storyteller instance
         """
-        from ..storyteller import StoryTeller
+        if use_hierarchical:
+            from ..hierarchical_storyteller import HierarchicalStoryTeller
 
-        return StoryTeller(
-            backend=self.config.backend,
-            model=self.config.model,
-            api_key=self.config.api_key,
-            ollama_url=self.config.ollama_url,
-            todo_content=self.config.todo_content,
-            critical_mode=self.config.critical_mode,
-            directives=self.config.directives
-        )
+            return HierarchicalStoryTeller(
+                backend=self.config.backend,
+                model=self.config.model,
+                api_key=self.config.api_key,
+                ollama_url=self.config.ollama_url,
+            )
+        else:
+            from ..storyteller import StoryTeller
 
-    def _generate_stories(self, context: AnalysisContext, storyteller) -> dict:
+            return StoryTeller(
+                backend=self.config.backend,
+                model=self.config.model,
+                api_key=self.config.api_key,
+                ollama_url=self.config.ollama_url,
+                todo_content=self.config.todo_content,
+                critical_mode=self.config.critical_mode,
+                directives=self.config.directives
+            )
+
+    def _generate_stories(self, context: AnalysisContext, storyteller, use_hierarchical: bool) -> dict:
         """Generate global stories with progress indicator.
 
         Args:
             context: Analysis context with phases
-            storyteller: Configured StoryTeller
+            storyteller: Configured storyteller
+            use_hierarchical: Whether using hierarchical mode
 
         Returns:
             Dictionary of generated stories
         """
+        from rich.progress import Progress, SpinnerColumn, TextColumn
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=self.console
         ) as progress:
-            task = progress.add_task("Generating story...", total=None)
+            if use_hierarchical:
+                task = progress.add_task("Generating hierarchical timeline...", total=None)
 
-            stories = storyteller.generate_global_story(
-                context.phases,
-                self.config.repo_name
-            )
+                timeline = storyteller.generate_timeline(
+                    context.phases,
+                    repo_name=self.config.repo_name
+                )
+
+                # Map timeline to story dict structure
+                stories = {
+                    'timeline': timeline,
+                    'executive_summary': 'See timeline for detailed evolution',
+                    'technical_evolution': 'See timeline for technical details',
+                    'deletion_story': '',
+                    'full_narrative': timeline,
+                }
+            else:
+                task = progress.add_task("Generating story...", total=None)
+
+                stories = storyteller.generate_global_story(
+                    context.phases,
+                    self.config.repo_name
+                )
 
             progress.update(task, completed=True)
 
