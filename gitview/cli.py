@@ -15,6 +15,8 @@ from .extractor import GitHistoryExtractor
 from .chunker import HistoryChunker
 from .summarizer import PhaseSummarizer
 from .storyteller import StoryTeller
+from .hierarchical_summarizer import HierarchicalPhaseSummarizer
+from .hierarchical_storyteller import generate_hierarchical_timeline
 from .writer import OutputWriter
 from .remote import RemoteRepoHandler
 from .branches import BranchManager, parse_branch_spec
@@ -144,6 +146,12 @@ EXAMPLES:
 
   # Quick analysis without LLM (just extract and chunk)
   gitview analyze --skip-llm
+
+  # Hierarchical summarization (preserves more details for large repos)
+  gitview analyze --summarization-strategy hierarchical
+
+  # Shortcut flag for hierarchical mode
+  gitview analyze --hierarchical
 
   # Analyze last 100 commits only
   gitview analyze --max-commits 100
@@ -370,6 +378,7 @@ def _analyze_single_branch(
     output: str,
     repo_name: str,
     strategy: str,
+    summarization_strategy: str,
     chunk_size: int,
     max_commits: Optional[int],
     backend: Optional[str],
@@ -634,18 +643,29 @@ def _analyze_single_branch(
 
     # Step 3: Summarize phases with LLM
     console.print("[bold]Step 3: Summarizing phases with LLM...[/bold]")
-    summarizer = PhaseSummarizer(
-        backend=backend,
-        model=model,
-        api_key=api_key,
-        ollama_url=ollama_url,
-        todo_content=todo_content,
-        critical_mode=critical_mode,
-        directives=directives
-    )
 
-    # Identify phases that need summarization (no summary)
-    phases_to_summarize = [p for p in phases if p.summary is None]
+    use_hierarchical = summarization_strategy == 'hierarchical'
+
+    if use_hierarchical:
+        summarizer = HierarchicalPhaseSummarizer(
+            backend=backend,
+            model=model,
+            api_key=api_key,
+            ollama_url=ollama_url,
+        )
+        phases_to_summarize = [p for p in phases if p.summary is None or
+                               not getattr(p, 'metadata', {}).get('hierarchical_summary')]
+    else:
+        summarizer = PhaseSummarizer(
+            backend=backend,
+            model=model,
+            api_key=api_key,
+            ollama_url=ollama_url,
+            todo_content=todo_content,
+            critical_mode=critical_mode,
+            directives=directives
+        )
+        phases_to_summarize = [p for p in phases if p.summary is None]
 
     if previous_analysis and len(phases_to_summarize) < len(phases):
         console.print(f"[cyan]Incremental mode: {len(phases_to_summarize)} phases need summarization "
@@ -664,10 +684,19 @@ def _analyze_single_branch(
             progress.update(task, description=f"Processing phase {i+1}/{len(phases)}...")
 
             if phase.summary is None:
-                # Need to summarize this phase
-                context = summarizer._build_context(previous_summaries)
-                summary = summarizer.summarize_phase(phase, context)
-                phase.summary = summary
+                if use_hierarchical:
+                    result = summarizer.summarize_phase(phase)
+                    phase.summary = result['full_summary']
+                    if not hasattr(phase, 'metadata'):
+                        phase.metadata = {}
+                    phase.metadata['hierarchical_summary'] = result
+                    summarizer._save_phase_summary(phase, result, str(phases_dir))  # type: ignore[attr-defined]
+                else:
+                    # Need to summarize this phase
+                    context = summarizer._build_context(previous_summaries)
+                    summary = summarizer.summarize_phase(phase, context)
+                    phase.summary = summary
+                    summarizer._save_phase_with_summary(phase, str(phases_dir))
                 progress.update(task, advance=1)
 
             previous_summaries.append({
@@ -675,8 +704,6 @@ def _analyze_single_branch(
                 'summary': phase.summary,
                 'loc_delta': phase.loc_delta,
             })
-
-            summarizer._save_phase_with_summary(phase, str(phases_dir))
 
     if len(phases_to_summarize) > 0:
         console.print(f"[green]Summarized {len(phases_to_summarize)} phase(s)[/green]\n")
@@ -722,7 +749,19 @@ def _analyze_single_branch(
 
     # Write timeline
     timeline_path = output_path / "timeline.md"
-    OutputWriter.write_simple_timeline(phases, str(timeline_path))
+    if use_hierarchical:
+        timeline_content = generate_hierarchical_timeline(
+            phases,
+            repo_name=repo_name,
+            backend=backend,
+            model=model,
+            api_key=api_key,
+            ollama_url=ollama_url,
+        )
+        timeline_path.parent.mkdir(parents=True, exist_ok=True)
+        timeline_path.write_text(timeline_content)
+    else:
+        OutputWriter.write_simple_timeline(phases, str(timeline_path))
     console.print(f"[green]Wrote {timeline_path}[/green]\n")
 
     # Success summary
@@ -767,6 +806,13 @@ def _analyze_single_branch(
               help="Ollama server URL (only for --backend ollama)")
 @click.option('--repo-name',
               help="Repository name for output (default: directory name)")
+@click.option('--summarization-strategy',
+              type=click.Choice(['simple', 'hierarchical']),
+              default='simple',
+              help="Summarization strategy: 'simple' (default) or 'hierarchical' "
+                   "(better fidelity for large/complex histories)")
+@click.option('--hierarchical', is_flag=True,
+              help="Shortcut for --summarization-strategy hierarchical")
 @click.option('--skip-llm', is_flag=True,
               help="Skip LLM summarization - only extract and chunk history "
                    "(useful for quick analysis without API costs)")
@@ -793,8 +839,8 @@ def _analyze_single_branch(
                    "Can also be set via GITHUB_TOKEN environment variable.")
 def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branches,
            branches, all_branches, exclude_branches, backend, model, api_key, ollama_url,
-           repo_name, skip_llm, incremental, since_commit, since_date, keep_clone,
-           todo, critical, directives, github_token):
+           repo_name, summarization_strategy, hierarchical, skip_llm, incremental, since_commit,
+           since_date, keep_clone, todo, critical, directives, github_token):
     """Analyze git repository and generate narrative history.
 
     This is the main command that runs the full pipeline:
@@ -821,6 +867,13 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
         if not critical:
             console.print("[yellow]Note: --todo specified without --critical. Consider using --critical for goal-focused analysis.[/yellow]")
         console.print()
+
+    # Normalize summarization strategy
+    if hierarchical:
+        summarization_strategy = 'hierarchical'
+
+    if summarization_strategy == 'hierarchical':
+        console.print("[cyan]Using hierarchical summarization strategy[/cyan]")
 
     # Validate critical mode
     if critical and not todo and not directives:
@@ -1261,18 +1314,31 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
 
         # Step 3: Summarize phases with LLM
         console.print("[bold]Step 3: Summarizing phases with LLM...[/bold]")
-        summarizer = PhaseSummarizer(
-            backend=backend,
-            model=model,
-            api_key=api_key,
-            ollama_url=ollama_url,
-            todo_content=todo_content,
-            critical_mode=critical,
-            directives=directives
-        )
 
-        # Identify phases that need summarization (no summary)
-        phases_to_summarize = [p for p in phases if p.summary is None]
+        use_hierarchical = summarization_strategy == 'hierarchical'
+
+        if use_hierarchical:
+            summarizer = HierarchicalPhaseSummarizer(
+                backend=backend,
+                model=model,
+                api_key=api_key,
+                ollama_url=ollama_url,
+            )
+            phases_to_summarize = [p for p in phases if p.summary is None or
+                                   not getattr(p, 'metadata', {}).get('hierarchical_summary')]
+        else:
+            summarizer = PhaseSummarizer(
+                backend=backend,
+                model=model,
+                api_key=api_key,
+                ollama_url=ollama_url,
+                todo_content=todo_content,
+                critical_mode=critical,
+                directives=directives
+            )
+
+            # Identify phases that need summarization (no summary)
+            phases_to_summarize = [p for p in phases if p.summary is None]
 
         if previous_analysis and len(phases_to_summarize) < len(phases):
             console.print(f"[cyan]Incremental mode: {len(phases_to_summarize)} phases need summarization "
@@ -1291,10 +1357,19 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                 progress.update(task, description=f"Processing phase {i+1}/{len(phases)}...")
 
                 if phase.summary is None:
-                    # Need to summarize this phase
-                    context = summarizer._build_context(previous_summaries)
-                    summary = summarizer.summarize_phase(phase, context)
-                    phase.summary = summary
+                    if use_hierarchical:
+                        result = summarizer.summarize_phase(phase)
+                        phase.summary = result['full_summary']
+                        if not hasattr(phase, 'metadata'):
+                            phase.metadata = {}
+                        phase.metadata['hierarchical_summary'] = result
+                        summarizer._save_phase_summary(phase, result, str(phases_dir))  # type: ignore[attr-defined]
+                    else:
+                        # Need to summarize this phase
+                        context = summarizer._build_context(previous_summaries)
+                        summary = summarizer.summarize_phase(phase, context)
+                        phase.summary = summary
+                        summarizer._save_phase_with_summary(phase, str(phases_dir))
                     progress.update(task, advance=1)
 
                 previous_summaries.append({
@@ -1302,8 +1377,6 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                     'summary': phase.summary,
                     'loc_delta': phase.loc_delta,
                 })
-
-                summarizer._save_phase_with_summary(phase, str(phases_dir))
 
         if len(phases_to_summarize) > 0:
             console.print(f"[green]Summarized {len(phases_to_summarize)} phase(s)[/green]\n")
@@ -1349,7 +1422,19 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
 
         # Write timeline
         timeline_path = output_path / "timeline.md"
-        OutputWriter.write_simple_timeline(phases, str(timeline_path))
+        if use_hierarchical:
+            timeline_content = generate_hierarchical_timeline(
+                phases,
+                repo_name=repo_name,
+                backend=backend,
+                model=model,
+                api_key=api_key,
+                ollama_url=ollama_url,
+            )
+            timeline_path.parent.mkdir(parents=True, exist_ok=True)
+            timeline_path.write_text(timeline_content)
+        else:
+            OutputWriter.write_simple_timeline(phases, str(timeline_path))
         console.print(f"[green]Wrote {timeline_path}[/green]\n")
 
         # Success summary
