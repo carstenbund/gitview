@@ -281,6 +281,65 @@ def _load_cached_analysis(output_dir: str):
     return cached_records, cached_phases
 
 
+def _analyze_single_branch_with_pipeline(
+    repo_path: str,
+    branch: str,
+    output: str,
+    repo_name: str,
+    strategy: str,
+    chunk_size: int,
+    max_commits: Optional[int],
+    backend: Optional[str],
+    model: Optional[str],
+    api_key: Optional[str],
+    ollama_url: str,
+    skip_llm: bool,
+    incremental: bool,
+    since_commit: Optional[str],
+    since_date: Optional[str],
+    todo_content: Optional[str] = None,
+    critical_mode: bool = False,
+    directives: Optional[str] = None,
+    github_token: Optional[str] = None,
+    github_repo_url: Optional[str] = None
+):
+    """Analyze a single branch using the new modular pipeline architecture."""
+    from .analyzer import AnalysisConfig
+    from .pipeline import AnalysisPipeline
+
+    # Create configuration from parameters
+    config = AnalysisConfig.from_cli_args(
+        repo_path=Path(repo_path),
+        branch=branch,
+        output_dir=Path(output),
+        repo_name=repo_name,
+        strategy=strategy,
+        chunk_size=chunk_size,
+        max_commits=max_commits,
+        skip_llm=skip_llm,
+        backend=backend,
+        model=model,
+        api_key=api_key,
+        ollama_url=ollama_url,
+        incremental=incremental,
+        since_commit=since_commit,
+        since_date=since_date,
+        critical_mode=critical_mode,
+        todo_content=todo_content,
+        directives=directives,
+        github_token=github_token,
+        github_repo_url=github_repo_url,
+    )
+
+    # Create and run pipeline
+    pipeline = AnalysisPipeline(config, console)
+    result = pipeline.run()
+
+    # Handle result
+    if not result.success:
+        sys.exit(1)
+
+
 def _analyze_single_branch(
     repo_path: str,
     branch: str,
@@ -303,7 +362,7 @@ def _analyze_single_branch(
     github_token: Optional[str] = None,
     github_repo_url: Optional[str] = None
 ):
-    """Analyze a single branch (helper function for multi-branch support)."""
+    """Analyze a single branch (helper function for multi-branch support - LEGACY)."""
     from typing import Optional
 
     # Check for incremental analysis
@@ -865,8 +924,8 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                         except Exception:
                             pass
 
-                # Analyze this branch (call single-branch logic)
-                _analyze_single_branch(
+                # Analyze this branch using new pipeline
+                _analyze_single_branch_with_pipeline(
                     repo_path=str(repo_path),
                     branch=current_branch,
                     output=str(branch_output),
@@ -902,97 +961,14 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
             console.print(f"Index report: {base_output_dir / 'index.md'}\n")
             return
 
-        # Single-branch analysis (backward compatible)
+        # Single-branch analysis using new pipeline
         # Use branch from branches_to_analyze if available, otherwise use original branch param
         if branches_to_analyze:
             branch = branches_to_analyze[0].name
 
-        # Check for incremental analysis
-        previous_analysis = None
-        existing_phases = []
-        starting_loc = 0
-        cached_records = None
-        cached_phases = None
-
-        if incremental or since_commit or since_date:
-            # Load previous analysis
-            previous_analysis = OutputWriter.load_previous_analysis(output)
-
-            if incremental and not previous_analysis:
-                console.print("[yellow]Warning: --incremental specified but no previous analysis found.[/yellow]")
-                console.print("[yellow]Running full analysis instead...[/yellow]\n")
-                incremental = False
-            elif previous_analysis:
-                metadata = previous_analysis.get('metadata', {})
-                last_hash = metadata.get('last_commit_hash')
-                last_date = metadata.get('last_commit_date')
-
-                if incremental:
-                    since_commit = last_hash
-                    console.print(f"[cyan]Incremental mode:[/cyan] Analyzing commits since {last_hash[:8]}")
-                    console.print(f"[cyan]Last analysis:[/cyan] {metadata.get('generated_at', 'unknown')}\n")
-
-                # Load existing phases
-                from .chunker import Phase
-                existing_phases = [Phase.from_dict(p) for p in previous_analysis.get('phases', [])]
-
-            if existing_phases and existing_phases[-1].commits:
-                starting_loc = existing_phases[-1].commits[-1].loc_total
-
-        if not since_commit and not since_date:
-            cached_records, cached_phases = _load_cached_analysis(output)
-
-        # Step 1: Extract git history
-        console.print("[bold]Step 1: Extracting git history...[/bold]")
-        extractor = GitHistoryExtractor(str(repo_path))
-
-        if cached_records is not None and not since_commit and not since_date:
-            records = cached_records
-            console.print("[cyan]Found cached commit history; reusing repo_history.jsonl from previous run.[/cyan]\n")
-        else:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console
-            ) as progress:
-                task = progress.add_task("Extracting commits...", total=None)
-
-                # Use incremental extraction if requested
-                if since_commit or since_date:
-                    records = extractor.extract_incremental(
-                        since_commit=since_commit,
-                        since_date=since_date,
-                        branch=branch
-                    )
-                    # Adjust LOC to continue from previous analysis
-                    if starting_loc > 0:
-                        extractor._calculate_cumulative_loc(records, starting_loc)
-                else:
-                    records = extractor.extract_history(max_commits=max_commits, branch=branch)
-
-                progress.update(task, completed=True)
-
-        if since_commit or since_date:
-            console.print(f"[green]Extracted {len(records)} new commits[/green]\n")
-
-            # Exit early if no new commits
-            if len(records) == 0:
-                console.print("[yellow]No new commits found since last analysis.[/yellow]")
-                console.print("[green]Repository is up to date![/green]\n")
-                return
-        else:
-            console.print(f"[green]Extracted {len(records)} commits[/green]\n")
-
-        # Save raw history
-        history_file = Path(output) / "repo_history.jsonl"
-        extractor.save_to_jsonl(records, str(history_file))
-
-        # Step 1.5: Enrich with GitHub context (if token provided)
-        if github_token and records:
-            console.print("[bold]Step 1.5: Enriching with GitHub context...[/bold]")
-
-            # Determine repo URL for GitHub API
-            github_repo_url = None
+        # Determine GitHub repo URL for enrichment
+        github_repo_url = None
+        if github_token:
             if not repo_handler.is_local and repo_handler.repo_info:
                 github_repo_url = f"{repo_handler.repo_info.org}/{repo_handler.repo_info.repo}"
             elif repo_handler.is_local:
@@ -1012,210 +988,29 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                 except Exception:
                     pass
 
-            if github_repo_url:
-                try:
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        console=console
-                    ) as progress:
-                        task = progress.add_task("Fetching GitHub PR/review data...", total=None)
-
-                        # Enrich commits with GitHub context
-                        github_contexts = enrich_commits_with_github(
-                            commits=records,
-                            github_token=github_token,
-                            repo_url=github_repo_url,
-                            branch=branch,
-                        )
-
-                        # Attach GitHub context to commit records
-                        enriched_count = 0
-                        for record in records:
-                            if record.commit_hash in github_contexts:
-                                ctx = github_contexts[record.commit_hash]
-                                record.github_context = ctx.to_dict()
-                                if ctx.pr_number:
-                                    enriched_count += 1
-
-                        progress.update(task, completed=True)
-
-                    console.print(f"[green]Enriched {enriched_count} commits with GitHub PR context[/green]\n")
-
-                    # Re-save with GitHub context
-                    extractor.save_to_jsonl(records, str(history_file))
-
-                except Exception as e:
-                    console.print(f"[yellow]Warning: GitHub enrichment failed: {e}[/yellow]")
-                    console.print("[yellow]Continuing without GitHub context...[/yellow]\n")
-            else:
-                console.print("[yellow]Warning: Could not determine GitHub repository URL[/yellow]")
-                console.print("[yellow]GitHub enrichment requires a GitHub-hosted repository[/yellow]\n")
-
-        # Step 2: Chunk into phases
-        console.print("[bold]Step 2: Chunking into phases...[/bold]")
-        chunker = HistoryChunker(strategy)
-
-        kwargs = {}
-        if strategy == 'fixed':
-            kwargs['chunk_size'] = chunk_size
-
-        # Handle incremental phase management
-        if existing_phases and len(records) > 0:
-            # Incremental mode: merge new commits with existing phases
-            merge_threshold = 10  # commits - merge if fewer, create new phase if more
-
-            if len(records) < merge_threshold:
-                # Append new commits to last phase
-                console.print(f"[yellow]Merging {len(records)} new commits into last phase...[/yellow]")
-                last_phase = existing_phases[-1]
-                last_phase.commits.extend(records)
-
-                # Recalculate phase stats
-                from .chunker import Phase
-                last_phase.commit_count = len(last_phase.commits)
-                last_phase.end_date = records[-1].timestamp
-                last_phase.total_insertions = sum(c.insertions for c in last_phase.commits)
-                last_phase.total_deletions = sum(c.deletions for c in last_phase.commits)
-                last_phase.loc_end = records[-1].loc_total
-                last_phase.loc_delta = last_phase.loc_end - last_phase.loc_start
-                if last_phase.loc_start > 0:
-                    last_phase.loc_delta_percent = (last_phase.loc_delta / last_phase.loc_start) * 100
-
-                # Clear summary so it will be regenerated
-                last_phase.summary = None
-
-                phases = existing_phases
-                console.print(f"[green]Updated last phase (now {last_phase.commit_count} commits)[/green]\n")
-            else:
-                # Create new phases for new commits
-                new_phases = chunker.chunk(records, **kwargs)
-
-                # Renumber new phases to continue from existing
-                for phase in new_phases:
-                    phase.phase_number = len(existing_phases) + phase.phase_number
-
-                phases = existing_phases + new_phases
-                console.print(f"[green]Created {len(new_phases)} new phases (total: {len(phases)})[/green]\n")
-        elif cached_phases is not None and not since_commit and not since_date:
-            phases = cached_phases
-            console.print(f"[cyan]Reusing {len(phases)} cached phases from previous run.[/cyan]\n")
-        else:
-            # Full analysis: chunk normally
-            phases = chunker.chunk(records, **kwargs)
-            console.print(f"[green]Created {len(phases)} phases[/green]\n")
-
-        # Display phase overview
-        _display_phase_overview(phases)
-
-        # Save phases
-        phases_dir = Path(output) / "phases"
-        chunker.save_phases(phases, str(phases_dir))
-
-        if skip_llm:
-            console.print("\n[yellow]Skipping LLM summarization. Writing basic timeline...[/yellow]")
-            timeline_file = Path(output) / "timeline.md"
-            OutputWriter.write_simple_timeline(phases, str(timeline_file))
-            console.print(f"[green]Wrote timeline to {timeline_file}[/green]\n")
-            return
-
-        # Step 3: Summarize phases with LLM
-        console.print("[bold]Step 3: Summarizing phases with LLM...[/bold]")
-        summarizer = PhaseSummarizer(
+        # Use new modular pipeline
+        _analyze_single_branch_with_pipeline(
+            repo_path=str(repo_path),
+            branch=branch,
+            output=output,
+            repo_name=repo_name,
+            strategy=strategy,
+            chunk_size=chunk_size,
+            max_commits=max_commits,
             backend=backend,
             model=model,
             api_key=api_key,
             ollama_url=ollama_url,
+            skip_llm=skip_llm,
+            incremental=incremental,
+            since_commit=since_commit,
+            since_date=since_date,
             todo_content=todo_content,
             critical_mode=critical,
-            directives=directives
+            directives=directives,
+            github_token=github_token,
+            github_repo_url=github_repo_url,
         )
-
-        # Identify phases that need summarization (no summary)
-        phases_to_summarize = [p for p in phases if p.summary is None]
-
-        if previous_analysis and len(phases_to_summarize) < len(phases):
-            console.print(f"[cyan]Incremental mode: {len(phases_to_summarize)} phases need summarization "
-                         f"({len(phases) - len(phases_to_summarize)} already summarized)[/cyan]")
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            task = progress.add_task("Summarizing phases...", total=len(phases_to_summarize))
-
-            # Build previous summaries from all phases (including existing ones)
-            previous_summaries = []
-            for i, phase in enumerate(phases):
-                progress.update(task, description=f"Processing phase {i+1}/{len(phases)}...")
-
-                if phase.summary is None:
-                    # Need to summarize this phase
-                    context = summarizer._build_context(previous_summaries)
-                    summary = summarizer.summarize_phase(phase, context)
-                    phase.summary = summary
-                    progress.update(task, advance=1)
-
-                previous_summaries.append({
-                    'phase_number': phase.phase_number,
-                    'summary': phase.summary,
-                    'loc_delta': phase.loc_delta,
-                })
-
-                summarizer._save_phase_with_summary(phase, str(phases_dir))
-
-        if len(phases_to_summarize) > 0:
-            console.print(f"[green]Summarized {len(phases_to_summarize)} phase(s)[/green]\n")
-        else:
-            console.print(f"[green]All phases already summarized[/green]\n")
-
-        # Step 4: Generate global story
-        console.print("[bold]Step 4: Generating global narrative...[/bold]")
-        storyteller = StoryTeller(
-            backend=backend,
-            model=model,
-            api_key=api_key,
-            ollama_url=ollama_url,
-            todo_content=todo_content,
-            critical_mode=critical,
-            directives=directives
-        )
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            task = progress.add_task("Generating story...", total=None)
-            stories = storyteller.generate_global_story(phases, repo_name)
-            progress.update(task, completed=True)
-
-        console.print(f"[green]Generated global narrative[/green]\n")
-
-        # Step 5: Write output
-        console.print("[bold]Step 5: Writing output files...[/bold]")
-        output_path = Path(output)
-
-        # Write markdown report
-        markdown_path = output_path / "history_story.md"
-        OutputWriter.write_markdown(stories, phases, str(markdown_path), repo_name)
-        console.print(f"[green]Wrote {markdown_path}[/green]")
-
-        # Write JSON data with metadata for incremental analysis
-        json_path = output_path / "history_data.json"
-        OutputWriter.write_json(stories, phases, str(json_path), repo_path=str(repo_path))
-        console.print(f"[green]Wrote {json_path}[/green]")
-
-        # Write timeline
-        timeline_path = output_path / "timeline.md"
-        OutputWriter.write_simple_timeline(phases, str(timeline_path))
-        console.print(f"[green]Wrote {timeline_path}[/green]\n")
-
-        # Success summary
-        console.print("[bold green]Analysis complete![/bold green]\n")
-        console.print(f"Analyzed {len(records)} commits across {len(phases)} phases")
-        console.print(f"Output written to: {output_path.resolve()}\n")
 
     except Exception as e:
         console.print(f"\n[red]Error: {e}[/red]")
