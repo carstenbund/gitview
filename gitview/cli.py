@@ -368,6 +368,9 @@ def _load_cached_analysis(output_dir: str):
             cached_phases = HistoryChunker.load_phases(str(phases_dir))
         except Exception as exc:  # pragma: no cover - defensive logging
             console.print(f"[yellow]Warning: Failed to load cached phases: {exc}[/yellow]")
+            console.print("[yellow]This usually means the cache directory only has summaries "
+                          "from an interrupted or older run; delete the phases folder to "
+                          "recompute commit details.[/yellow]")
 
     return cached_records, cached_phases
 

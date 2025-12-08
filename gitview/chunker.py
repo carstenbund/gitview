@@ -55,7 +55,12 @@ class Phase:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Phase':
         """Create Phase from dictionary."""
-        commits = [CommitRecord(**c) for c in data.pop('commits')]
+        # Copy to avoid mutating callers and handle legacy caches gracefully
+        data = dict(data)
+
+        commits_data = data.pop('commits', [])
+        commits = [CommitRecord(**c) for c in commits_data]
+
         return cls(commits=commits, **data)
 
 
