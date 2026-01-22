@@ -39,6 +39,11 @@ class FileChange:
     classes_added: List[str] = field(default_factory=list)
     classes_modified: List[str] = field(default_factory=list)
 
+    # AI summary (Phase 2)
+    ai_summary: Optional[str] = None
+    ai_summary_model: Optional[str] = None
+    ai_summary_generated_at: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary"""
         return asdict(self)
@@ -167,6 +172,22 @@ class FileHistory:
                     changes_parts.append(f"Classes: {', '.join(change.classes_modified[:2])}")
                 if changes_parts:
                     lines.append(f"  {' | '.join(changes_parts)}")
+
+            # AI Summary (if available)
+            if change.ai_summary:
+                lines.append("")
+                lines.append("  AI Summary:")
+                # Wrap summary text at reasonable length
+                summary_words = change.ai_summary.split()
+                current_line = "    "
+                for word in summary_words:
+                    if len(current_line) + len(word) + 1 > 78:
+                        lines.append(current_line)
+                        current_line = "    " + word
+                    else:
+                        current_line += " " + word if current_line != "    " else word
+                if current_line.strip():
+                    lines.append(current_line)
 
             # Diff snippet (if requested)
             if include_diffs and change.diff_snippet:
@@ -488,7 +509,8 @@ class FileHistoryTracker:
     def __init__(
         self,
         repo_path: str,
-        output_dir: str = "output/file_histories"
+        output_dir: str = "output/file_histories",
+        llm_router = None
     ):
         self.repo_path = Path(repo_path)
         self.output_dir = Path(output_dir)
@@ -499,13 +521,22 @@ class FileHistoryTracker:
         self.histories_dir = self.output_dir / "files"
         self.histories_dir.mkdir(parents=True, exist_ok=True)
 
+        # AI summarizer (optional)
+        self.llm_router = llm_router
+        self.ai_summarizer = None
+        if llm_router:
+            from .file_ai_summarizer import ChangeAISummarizer
+            cache_path = self.output_dir / "summaries_cache.json"
+            self.ai_summarizer = ChangeAISummarizer(llm_router, cache_path)
+
     def track_all_files(
         self,
         file_patterns: List[str] = None,
         exclude_patterns: List[str] = None,
         since_commit: Optional[str] = None,
         incremental: bool = True,
-        max_history_entries: int = 100
+        max_history_entries: int = 100,
+        with_ai_summaries: bool = False
     ) -> Dict[str, Any]:
         """
         Track all files matching patterns
@@ -516,6 +547,7 @@ class FileHistoryTracker:
             since_commit: Start from specific commit (overrides checkpoint)
             incremental: Use checkpoint for incremental processing
             max_history_entries: Max changes to keep per file
+            with_ai_summaries: Generate AI summaries for changes (requires llm_router)
 
         Returns:
             Summary statistics
@@ -561,12 +593,61 @@ class FileHistoryTracker:
                     histories[file_path] = history
                     total_changes += history.total_commits
 
-                    # Save individual history files
-                    self._save_file_history(history)
-
             except Exception as e:
                 print(f"  Warning: Failed to process {file_path}: {e}")
                 continue
+
+        # Generate AI summaries if requested
+        ai_summaries_generated = 0
+        if with_ai_summaries and self.ai_summarizer:
+            print(f"\nGenerating AI summaries for {total_changes} changes...")
+
+            for file_path, history in histories.items():
+                for change in history.changes:
+                    # Skip if already has summary (from cache)
+                    if change.ai_summary:
+                        continue
+
+                    try:
+                        summary = self.ai_summarizer.summarize_change(
+                            commit_hash=change.commit_hash,
+                            file_path=file_path,
+                            commit_message=change.commit_message,
+                            author=change.author_name,
+                            date=change.commit_date,
+                            lines_added=change.lines_added,
+                            lines_removed=change.lines_removed,
+                            diff_snippet=change.diff_snippet,
+                            functions_modified=change.functions_modified,
+                            functions_added=change.functions_added
+                        )
+
+                        change.ai_summary = summary
+                        change.ai_summary_model = self.llm_router.model
+                        change.ai_summary_generated_at = datetime.now().isoformat()
+                        ai_summaries_generated += 1
+
+                        # Progress indicator
+                        if ai_summaries_generated % 5 == 0:
+                            print(f"  Generated {ai_summaries_generated}/{total_changes} summaries...")
+
+                    except Exception as e:
+                        print(f"  Warning: Failed to generate summary for {file_path} in {change.commit_hash[:7]}: {e}")
+                        continue
+
+            # Print cache stats
+            cache_stats = self.ai_summarizer.get_cache_stats()
+            print(f"\nAI Summary Stats:")
+            print(f"  Generated: {ai_summaries_generated}")
+            print(f"  From cache: {cache_stats['cache_hits']}")
+            print(f"  Cache hit rate: {cache_stats['hit_rate_percent']:.1f}%")
+
+        # Save all histories (with AI summaries if generated)
+        for file_path, history in histories.items():
+            try:
+                self._save_file_history(history)
+            except Exception as e:
+                print(f"  Warning: Failed to save history for {file_path}: {e}")
 
         # Create/update checkpoint
         repo = self.extractor.repo
