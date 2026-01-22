@@ -1707,7 +1707,14 @@ def _display_phase_overview(phases):
               help='Use checkpoint for incremental processing (default: True)')
 @click.option('--max-entries', default=100, type=int,
               help='Maximum history entries per file (default: 100)')
-def track_files(repo, output, patterns, exclude, since_commit, incremental, max_entries):
+@click.option('--with-ai/--no-ai', default=False,
+              help='Generate AI summaries for changes (requires API key, costs money)')
+@click.option('--backend', default=None,
+              help='LLM backend: anthropic, openai, or ollama (auto-detected if not specified)')
+@click.option('--model', default=None,
+              help='LLM model to use (uses backend default if not specified)')
+def track_files(repo, output, patterns, exclude, since_commit, incremental, max_entries,
+                with_ai, backend, model):
     """Track detailed change history for all files in repository.
 
     \b
@@ -1737,6 +1744,13 @@ def track_files(repo, output, patterns, exclude, since_commit, incremental, max_
 
       # Track changes since specific commit
       gitview track-files --since-commit abc1234
+
+      # Generate AI summaries (requires API key)
+      export OPENAI_API_KEY="your-key"
+      gitview track-files --with-ai
+
+      # Use specific backend and model
+      gitview track-files --with-ai --backend anthropic --model claude-haiku-3-5-20241022
 
     \b
     Output Structure:
@@ -1800,12 +1814,62 @@ def track_files(repo, output, patterns, exclude, since_commit, incremental, max_
     console.print(f"[green]Incremental:[/green] {incremental}")
     console.print()
 
+    # Initialize LLM router if AI summaries requested
+    llm_router = None
+    if with_ai:
+        console.print(f"[yellow]AI Summaries:[/yellow] Enabled")
+        try:
+            from .backends.router import LLMRouter
+            llm_router = LLMRouter(backend=backend, model=model)
+            console.print(f"[green]LLM Backend:[/green] {llm_router.backend_type.value}")
+            console.print(f"[green]LLM Model:[/green] {llm_router.model}")
+        except Exception as e:
+            console.print(f"[bold red]Error initializing LLM:[/bold red] {e}")
+            console.print("[yellow]Hint:[/yellow] Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable")
+            sys.exit(1)
+        console.print()
+
     # Initialize tracker
     try:
-        tracker = FileHistoryTracker(repo_path=repo, output_dir=output)
+        tracker = FileHistoryTracker(repo_path=repo, output_dir=output, llm_router=llm_router)
     except Exception as e:
         console.print(f"[bold red]Error initializing tracker:[/bold red] {e}")
         sys.exit(1)
+
+    # Estimate cost if AI summaries requested
+    if with_ai and llm_router:
+        # Quick scan to estimate changes
+        console.print("[cyan]Estimating AI summary cost...[/cyan]")
+        from .file_tracker import FileChangeExtractor
+        extractor = FileChangeExtractor(repo)
+        tracked_files = extractor.get_tracked_files(
+            patterns=file_patterns,
+            exclude_patterns=exclude_patterns
+        )
+
+        # Estimate changes (rough approximation)
+        estimated_changes = len(tracked_files) * 5  # Assume avg 5 changes per file
+        if since_commit:
+            estimated_changes = min(estimated_changes, len(tracked_files) * 2)  # Fewer for incremental
+
+        cost_estimate = tracker.ai_summarizer.estimate_cost(estimated_changes)
+
+        console.print(f"\n[bold yellow]Cost Estimate:[/bold yellow]")
+        console.print(f"  Estimated changes: ~{estimated_changes}")
+        console.print(f"  Model: {cost_estimate['model']}")
+        console.print(f"  Estimated cost: ${cost_estimate['total_cost_usd']:.3f}")
+        console.print(f"  Cost per change: ${cost_estimate['cost_per_change']:.4f}")
+
+        if cost_estimate['total_cost_usd'] > 1.0:
+            console.print(f"\n[bold red]⚠ Warning:[/bold red] Estimated cost is over $1.00")
+
+        if not click.confirm("\nProceed with AI summary generation?", default=True):
+            console.print("[yellow]Skipping AI summaries. Running without --with-ai flag.[/yellow]")
+            with_ai = False
+            llm_router = None
+            tracker = FileHistoryTracker(repo_path=repo, output_dir=output, llm_router=None)
+
+        console.print()
 
     # Track files
     try:
@@ -1815,7 +1879,8 @@ def track_files(repo, output, patterns, exclude, since_commit, incremental, max_
                 exclude_patterns=exclude_patterns,
                 since_commit=since_commit,
                 incremental=incremental,
-                max_history_entries=max_entries
+                max_history_entries=max_entries,
+                with_ai_summaries=with_ai
             )
 
         # Display results
@@ -1844,7 +1909,9 @@ def track_files(repo, output, patterns, exclude, since_commit, incremental, max_
         console.print("\n[bold cyan]Next Steps:[/bold cyan]")
         console.print("  • View file history: [green]gitview file-history <path>[/green]")
         console.print("  • Incremental update: [green]gitview track-files --incremental[/green]")
-        console.print("  • Add AI summaries: [yellow]Coming in Phase 2[/yellow]")
+        if not with_ai:
+            console.print("  • Add AI summaries: [green]gitview track-files --with-ai[/green]")
+        console.print("  • Inject headers: [yellow]Coming in Phase 3[/yellow]")
         console.print()
 
     except Exception as e:
