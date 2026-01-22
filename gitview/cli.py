@@ -22,6 +22,7 @@ from .remote import RemoteRepoHandler
 from .branches import BranchManager, parse_branch_spec
 from .index_writer import IndexWriter
 from .github_enricher import GitHubEnricher, enrich_commits_with_github
+from .file_tracker import FileHistoryTracker
 
 console = Console()
 
@@ -1690,6 +1691,275 @@ def _display_phase_overview(phases):
         )
 
     console.print(table)
+
+
+@cli.command('track-files')
+@click.option('--repo', default='.', help='Path to repository (local or remote)')
+@click.option('--output', default='output/file_histories',
+              help='Output directory for file histories')
+@click.option('--patterns', default=None,
+              help='Comma-separated file patterns to track (e.g., "*.py,*.js,*.go")')
+@click.option('--exclude', default=None,
+              help='Comma-separated exclude patterns (e.g., "*_test.py,*.min.js")')
+@click.option('--since-commit', default=None,
+              help='Only track changes since this commit')
+@click.option('--incremental/--no-incremental', default=True,
+              help='Use checkpoint for incremental processing (default: True)')
+@click.option('--max-entries', default=100, type=int,
+              help='Maximum history entries per file (default: 100)')
+def track_files(repo, output, patterns, exclude, since_commit, incremental, max_entries):
+    """Track detailed change history for all files in repository.
+
+    \b
+    This command generates:
+      - .history companion files for each tracked file (human-readable)
+      - .json files with complete structured history (machine-readable)
+      - index.json with summary of all tracked files
+      - checkpoint.json for incremental processing
+
+    \b
+    Examples:
+
+      # Track all files in current repository
+      gitview track-files
+
+      # Track only Python and JavaScript files
+      gitview track-files --patterns "*.py,*.js"
+
+      # Exclude test files and minified files
+      gitview track-files --exclude "*_test.py,*.min.js,*-lock.json"
+
+      # Incremental update (only process new commits)
+      gitview track-files --incremental
+
+      # Full re-scan from scratch
+      gitview track-files --no-incremental
+
+      # Track changes since specific commit
+      gitview track-files --since-commit abc1234
+
+    \b
+    Output Structure:
+      output/file_histories/
+        ├── checkpoint.json           # Incremental processing state
+        ├── index.json                # Summary of all files
+        └── files/
+            ├── src/
+            │   ├── main.py.json      # Machine-readable history
+            │   ├── main.py.history   # Human-readable history
+            │   └── ...
+            └── ...
+
+    \b
+    Next Steps:
+      After tracking files, you can:
+      - View file history: gitview file-history <path>
+      - Inject headers: gitview inject-history <path>  [Phase 3]
+      - Add AI summaries: --with-ai flag  [Phase 2]
+    """
+    console.print("\n[bold cyan]GitView File History Tracker[/bold cyan]")
+    console.print("=" * 70)
+
+    # Handle remote repositories (reuse existing logic)
+    from .remote import RemoteRepoHandler
+    remote_handler = None
+
+    if not os.path.isdir(repo):
+        console.print(f"\n[yellow]Remote repository detected: {repo}[/yellow]")
+        remote_handler = RemoteRepoHandler(repo)
+
+        try:
+            with console.status("[bold green]Handling remote repository..."):
+                repo = remote_handler.get_local_path()
+        except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            sys.exit(1)
+
+    # Verify repository exists
+    if not os.path.isdir(os.path.join(repo, '.git')):
+        console.print(f"[bold red]Error:[/bold red] Not a git repository: {repo}")
+        sys.exit(1)
+
+    console.print(f"\n[green]Repository:[/green] {repo}")
+    console.print(f"[green]Output directory:[/green] {output}")
+
+    # Parse patterns
+    file_patterns = None
+    if patterns:
+        file_patterns = [p.strip() for p in patterns.split(',')]
+        console.print(f"[green]Include patterns:[/green] {', '.join(file_patterns)}")
+
+    exclude_patterns = None
+    if exclude:
+        exclude_patterns = [p.strip() for p in exclude.split(',')]
+        console.print(f"[green]Exclude patterns:[/green] {', '.join(exclude_patterns)}")
+
+    if since_commit:
+        console.print(f"[green]Since commit:[/green] {since_commit[:7]}")
+
+    console.print(f"[green]Incremental:[/green] {incremental}")
+    console.print()
+
+    # Initialize tracker
+    try:
+        tracker = FileHistoryTracker(repo_path=repo, output_dir=output)
+    except Exception as e:
+        console.print(f"[bold red]Error initializing tracker:[/bold red] {e}")
+        sys.exit(1)
+
+    # Track files
+    try:
+        with console.status("[bold green]Tracking file histories..."):
+            summary = tracker.track_all_files(
+                file_patterns=file_patterns,
+                exclude_patterns=exclude_patterns,
+                since_commit=since_commit,
+                incremental=incremental,
+                max_history_entries=max_entries
+            )
+
+        # Display results
+        console.print("\n[bold green]✓ Tracking Complete[/bold green]")
+        console.print("=" * 70)
+
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", justify="right", style="green")
+
+        table.add_row("Files tracked", str(summary['files_tracked']))
+        table.add_row("Total changes", f"{summary['total_changes']:,}")
+        table.add_row("Checkpoint commit", summary['checkpoint_commit'])
+        table.add_row("Checkpoint date", summary['checkpoint_date'][:10])
+        table.add_row("Output directory", summary['output_dir'])
+
+        console.print(table)
+
+        # Show some sample files
+        console.print("\n[bold cyan]Generated Files:[/bold cyan]")
+        console.print(f"  • checkpoint.json")
+        console.print(f"  • index.json")
+        console.print(f"  • files/*.history (human-readable)")
+        console.print(f"  • files/*.json (machine-readable)")
+
+        console.print("\n[bold cyan]Next Steps:[/bold cyan]")
+        console.print("  • View file history: [green]gitview file-history <path>[/green]")
+        console.print("  • Incremental update: [green]gitview track-files --incremental[/green]")
+        console.print("  • Add AI summaries: [yellow]Coming in Phase 2[/yellow]")
+        console.print()
+
+    except Exception as e:
+        console.print(f"\n[bold red]Error during tracking:[/bold red] {e}")
+        import traceback
+        console.print(traceback.format_exc())
+        sys.exit(1)
+
+    finally:
+        # Cleanup remote repo if needed
+        if remote_handler:
+            remote_handler.cleanup()
+
+
+@cli.command('file-history')
+@click.argument('file_path')
+@click.option('--repo', default='.', help='Path to repository')
+@click.option('--output', default='output/file_histories',
+              help='Output directory where histories are stored')
+@click.option('--format', 'output_format', default='text',
+              type=click.Choice(['text', 'json'], case_sensitive=False),
+              help='Output format (text or json)')
+@click.option('--recent', default=None, type=int,
+              help='Show only N most recent changes')
+def file_history(file_path, repo, output, output_format, recent):
+    """Display change history for a specific file.
+
+    \b
+    Shows detailed timeline of changes including:
+      - Commit metadata (hash, date, author)
+      - Lines added/removed
+      - Commit messages
+      - Function/class changes (when available)
+
+    \b
+    Examples:
+
+      # Show history for a file
+      gitview file-history src/main.py
+
+      # Show only last 5 changes
+      gitview file-history src/main.py --recent 5
+
+      # Export to JSON
+      gitview file-history src/main.py --format json > history.json
+    """
+    tracker = FileHistoryTracker(repo_path=repo, output_dir=output)
+
+    try:
+        history = tracker.get_file_history(file_path)
+
+        if not history:
+            console.print(f"[yellow]No history found for:[/yellow] {file_path}")
+            console.print(f"\nMake sure you've run: [green]gitview track-files[/green]")
+            sys.exit(1)
+
+        if output_format == 'json':
+            # JSON output
+            import json
+            print(json.dumps(history.to_dict(), indent=2))
+        else:
+            # Text output
+            console.print()
+            console.print("=" * 80)
+            console.print(f"[bold cyan]FILE HISTORY: {file_path}[/bold cyan]")
+            console.print("=" * 80)
+
+            console.print(f"\n[green]First seen:[/green] {history.first_commit_date[:10]} (commit {history.first_commit[:7]})")
+            console.print(f"[green]Last modified:[/green] {history.last_commit_date[:10]} (commit {history.last_commit[:7]})")
+            console.print(f"[green]Total commits:[/green] {history.total_commits}")
+            console.print(f"[green]Lines added:[/green] +{history.total_lines_added}")
+            console.print(f"[green]Lines removed:[/green] -{history.total_lines_removed}")
+            console.print(f"[green]Net change:[/green] {history.total_lines_added - history.total_lines_removed:+d} lines")
+
+            # Contributors
+            if history.authors:
+                console.print(f"\n[bold cyan]Contributors:[/bold cyan]")
+                for author in history.authors[:5]:
+                    name = author.get('name', 'Unknown')
+                    count = author.get('commits', 0)
+                    pct = (count / history.total_commits * 100) if history.total_commits > 0 else 0
+                    console.print(f"  {name:30} {count:3} commits ({pct:5.1f}%)")
+
+            # Changes
+            display_count = recent if recent else len(history.changes)
+            display_count = min(display_count, len(history.changes))
+
+            console.print(f"\n[bold cyan]Recent Changes - Last {display_count} of {history.total_commits}[/bold cyan]")
+            console.print("-" * 80)
+
+            for i, change in enumerate(history.changes[:display_count]):
+                console.print(f"\n[yellow]{change.commit_date[:19]}[/yellow] | [cyan]{change.commit_hash[:7]}[/cyan] | {change.author_name}")
+
+                # Commit message
+                msg_lines = change.commit_message.strip().split('\n')
+                console.print(f"  {msg_lines[0]}")
+
+                # Stats
+                console.print(f"  [green]+{change.lines_added}[/green] [red]-{change.lines_removed}[/red] lines")
+
+            console.print("\n" + "=" * 80)
+
+            # Show where full data is
+            json_path = Path(output) / "files" / f"{file_path}.json"
+            history_path = Path(output) / "files" / f"{file_path}.history"
+            console.print(f"\n[dim]Full history available at:[/dim]")
+            console.print(f"  [dim]• {json_path}[/dim]")
+            console.print(f"  [dim]• {history_path}[/dim]")
+            console.print()
+
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        import traceback
+        console.print(traceback.format_exc())
+        sys.exit(1)
 
 
 def main():
