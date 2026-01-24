@@ -2029,6 +2029,254 @@ def file_history(file_path, repo, output, output_format, recent):
         sys.exit(1)
 
 
+@cli.command('inject-history')
+@click.argument('paths', nargs=-1, required=True)
+@click.option('--repo', default='.', help='Path to repository')
+@click.option('--output', default='output/file_histories',
+              help='Output directory where histories are stored')
+@click.option('--max-entries', default=10, type=int,
+              help='Maximum number of recent changes to include (default: 10)')
+@click.option('--dry-run', is_flag=True,
+              help='Preview changes without modifying files')
+@click.option('--all', 'inject_all', is_flag=True,
+              help='Inject headers into all tracked files')
+def inject_history(paths, repo, output, max_entries, dry_run, inject_all):
+    """Inject file change history as header comments into source files.
+
+    \b
+    This command injects change histories as formatted comments at the top
+    of source files. Supports multiple programming languages with appropriate
+    comment styles.
+
+    \b
+    Examples:
+
+      # Inject history into specific files
+      gitview inject-history src/main.py src/utils.py
+
+      # Inject with more entries
+      gitview inject-history src/main.py --max-entries 20
+
+      # Preview changes (dry-run)
+      gitview inject-history src/main.py --dry-run
+
+      # Inject into all tracked files
+      gitview inject-history --all
+
+    \b
+    Supported Languages:
+      Python, JavaScript, TypeScript, Java, Go, Rust, C/C++, C#, Ruby, PHP,
+      Swift, Kotlin, Scala, Shell, SQL, R, Perl, Lua, YAML
+
+    \b
+    Note:
+      - Existing headers will be replaced with updated versions
+      - Use --dry-run to preview changes first
+      - Files must have been tracked with 'gitview track-files' first
+      - Use 'gitview remove-history' to remove injected headers
+    """
+    from .file_tracker import FileHistoryTracker
+    from .history_injector import HistoryInjector
+
+    console.print("\n[bold cyan]GitView History Header Injection[/bold cyan]")
+    console.print("=" * 70)
+
+    # Initialize tracker and injector
+    try:
+        tracker = FileHistoryTracker(repo_path=repo, output_dir=output)
+        injector = HistoryInjector(tracker)
+    except Exception as e:
+        console.print(f"[bold red]Error initializing:[/bold red] {e}")
+        sys.exit(1)
+
+    # Determine files to inject
+    if inject_all:
+        # Get all tracked files from index
+        index_path = Path(output) / "index.json"
+        if not index_path.exists():
+            console.print(f"[bold red]Error:[/bold red] No tracked files found")
+            console.print(f"Run: [green]gitview track-files[/green] first")
+            sys.exit(1)
+
+        import json
+        with open(index_path, 'r') as f:
+            index = json.load(f)
+
+        file_list = [f['path'] for f in index.get('files', [])]
+        console.print(f"\n[green]Injecting headers into {len(file_list)} tracked files[/green]")
+    else:
+        file_list = list(paths)
+        console.print(f"\n[green]Injecting headers into {len(file_list)} file(s)[/green]")
+
+    if dry_run:
+        console.print("[yellow]DRY RUN MODE - No files will be modified[/yellow]")
+
+    console.print()
+
+    # Inject headers
+    successes = 0
+    failures = 0
+    skipped = 0
+
+    for file_path in file_list:
+        # Check if file exists
+        if not Path(file_path).exists():
+            console.print(f"[red]✗[/red] {file_path} - File not found")
+            skipped += 1
+            continue
+
+        success, message = injector.inject_history(
+            file_path,
+            max_entries=max_entries,
+            dry_run=dry_run
+        )
+
+        if success:
+            if dry_run:
+                console.print(f"[green]✓[/green] {file_path} - Would inject header")
+                # Optionally show preview
+                if len(file_list) == 1:
+                    console.print("\n[bold cyan]Preview:[/bold cyan]")
+                    message_lines = message.split('\n')
+                    preview = message_lines[:30]  # First 30 lines
+                    for line in preview:
+                        console.print(f"  {line}")
+                    if len(message_lines) > 30:
+                        remaining = len(message_lines) - 30
+                        console.print(f"  ... ({remaining} more lines)")
+            else:
+                console.print(f"[green]✓[/green] {message}")
+            successes += 1
+        else:
+            console.print(f"[red]✗[/red] {message}")
+            failures += 1
+
+    # Summary
+    console.print("\n" + "=" * 70)
+    console.print("[bold cyan]Summary:[/bold cyan]")
+    console.print(f"  Successful: {successes}")
+    console.print(f"  Failed: {failures}")
+    console.print(f"  Skipped: {skipped}")
+
+    if dry_run:
+        console.print(f"\n[yellow]Dry run complete. Run without --dry-run to apply changes.[/yellow]")
+    elif successes > 0:
+        console.print(f"\n[green]✓ Headers injected successfully![/green]")
+        console.print(f"To remove headers: [green]gitview remove-history <files>[/green]")
+
+    console.print()
+
+
+@cli.command('remove-history')
+@click.argument('paths', nargs=-1, required=True)
+@click.option('--repo', default='.', help='Path to repository')
+@click.option('--dry-run', is_flag=True,
+              help='Preview changes without modifying files')
+@click.option('--all', 'remove_all', is_flag=True,
+              help='Remove headers from all files with injected headers')
+def remove_history(paths, repo, dry_run, remove_all):
+    """Remove injected file change history headers from source files.
+
+    \b
+    This command removes previously injected history headers from files.
+
+    \b
+    Examples:
+
+      # Remove headers from specific files
+      gitview remove-history src/main.py src/utils.py
+
+      # Preview what would be removed (dry-run)
+      gitview remove-history src/main.py --dry-run
+
+      # Remove headers from all files
+      gitview remove-history --all
+
+    \b
+    Note:
+      - Only removes headers that were injected by gitview
+      - Safe to run multiple times (no-op if no header exists)
+      - Use --dry-run to preview changes first
+    """
+    from .file_tracker import FileHistoryTracker
+    from .history_injector import HistoryInjector
+
+    console.print("\n[bold cyan]GitView History Header Removal[/bold cyan]")
+    console.print("=" * 70)
+
+    # Initialize tracker and injector
+    try:
+        tracker = FileHistoryTracker(repo_path=repo, output_dir='output/file_histories')
+        injector = HistoryInjector(tracker)
+    except Exception as e:
+        console.print(f"[bold red]Error initializing:[/bold red] {e}")
+        sys.exit(1)
+
+    # Determine files to process
+    if remove_all:
+        # Find all files with injected headers
+        console.print("\n[yellow]Scanning for files with injected headers...[/yellow]")
+        file_list = []
+
+        # Walk through current directory
+        import os
+        for root, dirs, files in os.walk('.'):
+            # Skip hidden and common ignore directories
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', 'venv', '__pycache__']]
+
+            for file in files:
+                file_path = os.path.join(root, file)
+                # Check if file has supported extension and injected header
+                if injector.detect_language(file_path):
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        if injector.has_injected_header(content):
+                            file_list.append(file_path)
+                    except:
+                        pass  # Skip files that can't be read
+
+        console.print(f"[green]Found {len(file_list)} file(s) with injected headers[/green]")
+    else:
+        file_list = list(paths)
+        console.print(f"\n[green]Removing headers from {len(file_list)} file(s)[/green]")
+
+    if dry_run:
+        console.print("[yellow]DRY RUN MODE - No files will be modified[/yellow]")
+
+    console.print()
+
+    # Remove headers
+    successes = 0
+    failures = 0
+
+    for file_path in file_list:
+        success, message = injector.remove_history(file_path, dry_run=dry_run)
+
+        if success:
+            if dry_run:
+                console.print(f"[green]✓[/green] {file_path} - Would remove header")
+            else:
+                console.print(f"[green]✓[/green] {message}")
+            successes += 1
+        else:
+            console.print(f"[red]✗[/red] {message}")
+            failures += 1
+
+    # Summary
+    console.print("\n" + "=" * 70)
+    console.print("[bold cyan]Summary:[/bold cyan]")
+    console.print(f"  Successful: {successes}")
+    console.print(f"  Failed: {failures}")
+
+    if dry_run:
+        console.print(f"\n[yellow]Dry run complete. Run without --dry-run to apply changes.[/yellow]")
+    elif successes > 0:
+        console.print(f"\n[green]✓ Headers removed successfully![/green]")
+
+    console.print()
+
+
 def main():
     """Main entry point."""
     cli()
