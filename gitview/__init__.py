@@ -1,3 +1,3 @@
 """GitView - Git history analyzer with LLM-powered narrative generation."""
 
-__version__ = "0.2.4"
+__version__ = "0.4.1"
