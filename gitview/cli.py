@@ -1911,7 +1911,8 @@ def track_files(repo, output, patterns, exclude, since_commit, incremental, max_
         console.print("  • Incremental update: [green]gitview track-files --incremental[/green]")
         if not with_ai:
             console.print("  • Add AI summaries: [green]gitview track-files --with-ai[/green]")
-        console.print("  • Inject headers: [yellow]Coming in Phase 3[/yellow]")
+        console.print("  • Inject headers: [green]gitview inject-history <path>[/green]")
+        console.print("  • Compare branches: [green]gitview compare-branches <branch1> <branch2>[/green]")
         console.print()
 
     except Exception as e:
