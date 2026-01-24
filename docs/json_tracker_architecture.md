@@ -4,16 +4,16 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          Git Repository                              │
+│                          Git Repository                             │
 │  (1,247 commits with JSON changes across history)                   │
 └────────────────────────┬────────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    JsonFileTracker (Orchestrator)                    │
+│                    JsonFileTracker (Orchestrator)                   │
 │  • Manages incremental processing                                   │
-│  • Coordinates components                                            │
-│  • Handles caching strategy                                          │
+│  • Coordinates components                                           │
+│  • Handles caching strategy                                         │
 └────────────┬───────────────────────────┬────────────────────────────┘
              │                           │
              ▼                           ▼
@@ -23,14 +23,14 @@
 │  Last run: abc1234     │  │    1. Filter JSON files               │
 │  Resume from: xyz9876  │  │    2. Extract before/after            │
 │  AI summaries: 342     │  │    3. Parse JSON structures           │
-│  Cost: $5.23          │  │    4. Deep comparison                 │
+│  Cost: $5.23           │  │    4. Deep comparison                 │
 └────────────────────────┘  │    5. Generate structured diff        │
-                             └───────────┬───────────────────────────┘
+                            └───────────┬───────────────────────────┘
                                          │
                                          ▼
                              ┌───────────────────────────────────────┐
                              │      JsonFileChange Object            │
-                             │      ──────────────────────            │
+                             │      ──────────────────────           │
                              │      • Commit metadata                │
                              │      • Keys added/removed/modified    │
                              │      • Structural changes             │
@@ -47,10 +47,10 @@
 │  • Skip if already summarized    │          │  (EXPENSIVE)          │
 │  • 100% hit rate on re-runs      │          │                       │
 └──────────────────────────────────┘          │  • Cost estimation    │
-                                               │  • Batch processing   │
-                                               │  • LLM integration    │
-                                               │  • Smart prompting    │
-                                               └───────────┬───────────┘
+                                              │  • Batch processing   │
+                                              │  • LLM integration    │
+                                              │  • Smart prompting    │
+                                              └───────────┬───────────┘
                                                            │
                                                            ▼
                              ┌───────────────────────────────────────┐
@@ -63,11 +63,11 @@
                                          │
                                          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Per-File History Aggregator                     │
-│  • Group changes by file path                                        │
-│  • Calculate statistics (total changes, contributors)                │
-│  • Build chronological timeline                                      │
-└────────────┬────────────────────────────┬────────────────────────────┘
+│                      Per-File History Aggregator                    │
+│  • Group changes by file path                                       │
+│  • Calculate statistics (total changes, contributors)               │
+│  • Build chronological timeline                                     │
+└────────────┬────────────────────────────┬───────────────────────────┘
              │                            │
              ▼                            ▼
 ┌────────────────────────┐  ┌────────────────────────────────────────┐
@@ -76,10 +76,10 @@
 │  output/json_tracking/ │  │   • Markdown timeline                  │
 │  ├── checkpoint.json   │  │   • JSON export                        │
 │  ├── files/            │  │   • HTML interactive (future)          │
-│  │   ├── config.json.history               │
-│  │   └── package.json.history              │
-│  ├── summaries_cache.json                  │
-│  └── tracking_index.json                   │
+│  │   ├── config.json.history                                       │
+│  │   └── package.json.history                                      │
+│  ├── summaries_cache.json                                          │
+│  └── tracking_index.json                                           │
 └────────────────────────┘  └────────────────────────────────────────┘
 ```
 
