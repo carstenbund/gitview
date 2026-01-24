@@ -2277,6 +2277,139 @@ def remove_history(paths, repo, dry_run, remove_all):
     console.print()
 
 
+@cli.command('compare-branches')
+@click.argument('branch_a')
+@click.argument('branch_b')
+@click.option('--repo', default='.', help='Path to repository')
+@click.option('--output', default='output/branch_comparisons',
+              help='Output directory for comparison results')
+@click.option('--patterns', default=None,
+              help='Comma-separated file patterns to compare (e.g., "*.py,*.js")')
+@click.option('--exclude', default=None,
+              help='Comma-separated exclude patterns')
+@click.option('--top-n', default=10, type=int,
+              help='Number of top divergent files to highlight (default: 10)')
+def compare_branches(branch_a, branch_b, repo, output, patterns, exclude, top_n):
+    """Compare file histories between two git branches.
+
+    \b
+    This command tracks files on both branches and generates a detailed
+    comparison report showing:
+      - Files unique to each branch
+      - Files with divergent changes
+      - Commit differences
+      - Line change statistics
+      - Top most divergent files
+
+    \b
+    Examples:
+
+      # Compare feature branch to main
+      gitview compare-branches main feature/my-feature
+
+      # Compare only Python files
+      gitview compare-branches main develop --patterns "*.py"
+
+      # Compare with exclusions
+      gitview compare-branches v1.0 v2.0 --exclude "*test*,*.min.js"
+
+    \b
+    Output Structure:
+      output/branch_comparisons/
+        ├── branches/
+        │   ├── main/              # Tracked files for main branch
+        │   └── feature/           # Tracked files for feature branch
+        └── comparisons/
+            └── main_vs_feature/
+                ├── summary.json   # Comparison summary
+                ├── divergences.json  # Detailed divergences
+                └── report.txt     # Human-readable report
+
+    \b
+    Next Steps:
+      After comparison, you can:
+      - Review report.txt for overview
+      - Analyze divergences.json for details
+      - Use --with-ai flag to get LLM analysis (coming soon)
+    """
+    from .branch_comparator import BranchComparator
+
+    console.print("\n[bold cyan]GitView Branch Comparison[/bold cyan]")
+    console.print("=" * 70)
+
+    # Parse patterns
+    file_patterns = None
+    if patterns:
+        file_patterns = [p.strip() for p in patterns.split(',')]
+        console.print(f"[green]Include patterns:[/green] {', '.join(file_patterns)}")
+
+    exclude_patterns = None
+    if exclude:
+        exclude_patterns = [p.strip() for p in exclude.split(',')]
+        console.print(f"[green]Exclude patterns:[/green] {', '.join(exclude_patterns)}")
+
+    # Initialize comparator
+    try:
+        comparator = BranchComparator(repo_path=repo, output_dir=output)
+    except Exception as e:
+        console.print(f"[bold red]Error initializing comparator:[/bold red] {e}")
+        sys.exit(1)
+
+    # Compare branches
+    try:
+        summary, divergences = comparator.compare_branches(
+            branch_a=branch_a,
+            branch_b=branch_b,
+            file_patterns=file_patterns,
+            exclude_patterns=exclude_patterns
+        )
+
+        # Generate and display report
+        report = comparator.generate_comparison_report(branch_a, branch_b, top_n=top_n)
+
+        console.print("\n[bold green]✓ Comparison Complete[/bold green]")
+        console.print("=" * 70)
+        console.print()
+        console.print(report)
+
+        # Summary table
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", justify="right", style="green")
+
+        table.add_row("Total files compared", str(summary.total_files_compared))
+        table.add_row(f"Files only in {branch_a}", str(summary.files_only_in_a))
+        table.add_row(f"Files only in {branch_b}", str(summary.files_only_in_b))
+        table.add_row("Files in both", str(summary.files_in_both))
+        table.add_row("Files diverged", str(summary.files_diverged))
+        table.add_row("", "")
+        table.add_row(f"Commits only in {branch_a}", str(summary.commits_only_in_a))
+        table.add_row(f"Commits only in {branch_b}", str(summary.commits_only_in_b))
+        table.add_row("Commits in both", str(summary.commits_in_both))
+
+        console.print("\n[bold cyan]Quick Summary:[/bold cyan]")
+        console.print(table)
+
+        # Top divergent files
+        if summary.top_divergent_files:
+            console.print(f"\n[bold cyan]Top {min(top_n, len(summary.top_divergent_files))} Most Divergent Files:[/bold cyan]")
+            for i, (file_path, score) in enumerate(summary.top_divergent_files[:top_n], 1):
+                color = "red" if score > 70 else "yellow" if score > 40 else "green"
+                console.print(f"  {i}. [{color}]{score:5.1f}[/{color}] - {file_path}")
+
+        console.print(f"\n[green]Full report saved to:[/green]")
+        sanitized_a = branch_a.replace('/', '_')
+        sanitized_b = branch_b.replace('/', '_')
+        console.print(f"  {output}/comparisons/{sanitized_a}_vs_{sanitized_b}/report.txt")
+        console.print()
+
+    except Exception as e:
+        console.print(f"\n[bold red]Error during comparison:[/bold red] {e}")
+        import traceback
+        console.print(traceback.format_exc())
+        sys.exit(1)
+
+
 def main():
     """Main entry point."""
     cli()
