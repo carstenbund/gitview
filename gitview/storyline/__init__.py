@@ -19,6 +19,7 @@ from .detector import (
 from .tracker import StorylineTracker, create_tracker_from_legacy
 from .parser import StorylineResponseParser, parse_storylines, build_storyline_prompt_section
 from .reporter import StorylineReporter, generate_storyline_section_for_markdown
+from .extractor import StorylineExtractor, ExtractedStoryline, parse_storylines as extract_storylines
 
 __all__ = [
     # Models
@@ -46,4 +47,8 @@ __all__ = [
     # Reporter
     'StorylineReporter',
     'generate_storyline_section_for_markdown',
+    # Extractor (unified JSON extraction)
+    'StorylineExtractor',
+    'ExtractedStoryline',
+    'extract_storylines',
 ]
