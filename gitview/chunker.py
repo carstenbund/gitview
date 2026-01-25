@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from datetime import datetime
 
 from .extractor import CommitRecord
@@ -59,9 +59,13 @@ class Phase:
         data = dict(data)
 
         commits_data = data.pop('commits', [])
-        commits = [CommitRecord(**c) for c in commits_data]
+        commits = [CommitRecord.from_dict(c) for c in commits_data]
 
-        return cls(commits=commits, **data)
+        # Filter to only known Phase fields to handle legacy cache formats
+        known_fields = {f.name for f in fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in known_fields}
+
+        return cls(commits=commits, **filtered_data)
 
 
 class HistoryChunker:

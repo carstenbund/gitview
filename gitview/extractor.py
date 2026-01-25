@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 
 import git
 from git import Repo
@@ -59,6 +59,13 @@ class CommitRecord:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'CommitRecord':
+        """Create CommitRecord from dictionary, filtering unknown fields."""
+        known_fields = {f.name for f in fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in known_fields}
+        return cls(**filtered_data)
 
     def has_github_context(self) -> bool:
         """Check if this commit has GitHub context data."""
