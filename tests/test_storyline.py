@@ -506,3 +506,204 @@ class TestStorylineIntegration:
         found = db.get_by_title('OAuth Implementation')
         assert found is not None
         assert found.status == StorylineStatus.ACTIVE
+
+
+# =============================================================================
+# Parser Tests
+# =============================================================================
+
+class TestStorylineResponseParser:
+    """Test storyline response parser."""
+
+    def test_parse_json_block(self):
+        """Test parsing JSON code block format."""
+        from gitview.storyline.parser import StorylineResponseParser
+
+        parser = StorylineResponseParser()
+
+        response = '''Here is my summary of the phase.
+
+```json
+{
+  "storylines": [
+    {
+      "title": "OAuth Implementation",
+      "status": "continued",
+      "category": "feature",
+      "description": "Added token refresh"
+    }
+  ]
+}
+```
+'''
+
+        summary, storylines = parser.parse(response)
+
+        assert len(storylines) == 1
+        assert storylines[0]['title'] == 'OAuth Implementation'
+        assert storylines[0]['status'] == 'continued'
+        assert storylines[0]['category'] == 'feature'
+
+    def test_parse_markdown_format(self):
+        """Test parsing markdown format (fallback)."""
+        from gitview.storyline.parser import StorylineResponseParser
+
+        parser = StorylineResponseParser()
+
+        response = '''Here is my summary.
+
+## Storylines
+- [NEW:feature] User Auth: Started implementing OAuth
+- [CONTINUED:refactor] API Cleanup: Migrated more endpoints
+- [COMPLETED:bugfix] Token Bug: Fixed refresh issue
+'''
+
+        summary, storylines = parser.parse(response)
+
+        assert len(storylines) == 3
+        assert storylines[0]['title'] == 'User Auth'
+        assert storylines[0]['status'] == 'new'
+        assert storylines[1]['status'] == 'continued'
+        assert storylines[2]['status'] == 'completed'
+
+    def test_normalize_status(self):
+        """Test status normalization."""
+        from gitview.storyline.parser import StorylineResponseParser
+
+        parser = StorylineResponseParser()
+
+        assert parser._normalize_status('NEW') == 'new'
+        assert parser._normalize_status('started') == 'new'
+        assert parser._normalize_status('ongoing') == 'continued'
+        assert parser._normalize_status('done') == 'completed'
+        assert parser._normalize_status('blocked') == 'stalled'
+
+
+# =============================================================================
+# Tracker Tests
+# =============================================================================
+
+class TestStorylineTracker:
+    """Test storyline tracker."""
+
+    def test_convert_llm_storylines(self):
+        """Test converting LLM storylines to signals."""
+        from gitview.storyline.tracker import StorylineTracker
+
+        tracker = StorylineTracker()
+
+        llm_storylines = [
+            {'title': 'OAuth', 'status': 'new', 'category': 'feature', 'description': 'Started OAuth'},
+            {'title': 'Cleanup', 'status': 'continued', 'category': 'refactor', 'description': 'More cleanup'},
+        ]
+
+        signals = tracker._convert_llm_storylines_to_signals(llm_storylines, phase_number=3)
+
+        assert len(signals) == 2
+        assert signals[0].title == 'OAuth'
+        assert signals[0].phase_number == 3
+        assert signals[1].title == 'Cleanup'
+
+    def test_get_storylines_for_prompt(self):
+        """Test getting storylines formatted for prompts."""
+        from gitview.storyline.tracker import StorylineTracker
+
+        tracker = StorylineTracker()
+
+        # Add a storyline
+        signal = StorylineSignal(
+            source='test', confidence=0.8, phase_number=1,
+            commit_hashes=['abc'], title='Test Feature',
+            category=StorylineCategory.FEATURE, description='Test',
+        )
+        storyline = Storyline.from_signal(signal)
+        storyline.status = StorylineStatus.ACTIVE
+        tracker.database.add_storyline(storyline)
+
+        prompt_data = tracker.get_storylines_for_prompt()
+
+        assert len(prompt_data) == 1
+        assert prompt_data[0]['title'] == 'Test Feature'
+        assert 'status' in prompt_data[0]
+
+
+# =============================================================================
+# Reporter Tests
+# =============================================================================
+
+class TestStorylineReporter:
+    """Test storyline reporter."""
+
+    def test_generate_index(self):
+        """Test generating storyline index."""
+        from gitview.storyline.reporter import StorylineReporter
+
+        db = StorylineDatabase()
+
+        # Add storylines
+        completed = Storyline(
+            id='sl_1', title='Completed Feature', category=StorylineCategory.FEATURE,
+            status=StorylineStatus.COMPLETED, confidence=0.9,
+            first_phase=1, last_phase=3, phases_involved=[1, 2, 3],
+        )
+        active = Storyline(
+            id='sl_2', title='Active Work', category=StorylineCategory.REFACTOR,
+            status=StorylineStatus.ACTIVE, confidence=0.8,
+            first_phase=2, last_phase=4, phases_involved=[2, 3, 4],
+        )
+
+        db.add_storyline(completed)
+        db.add_storyline(active)
+
+        reporter = StorylineReporter(database=db)
+        index = reporter.generate_storyline_index()
+
+        assert '# Storyline Index' in index
+        assert 'Completed Feature' in index
+        assert 'Active Work' in index
+
+    def test_generate_timeline_view(self):
+        """Test generating ASCII timeline."""
+        from gitview.storyline.reporter import StorylineReporter
+
+        db = StorylineDatabase()
+
+        storyline = Storyline(
+            id='sl_1', title='Test Feature', category=StorylineCategory.FEATURE,
+            status=StorylineStatus.ACTIVE, confidence=0.8,
+            first_phase=1, last_phase=3, phases_involved=[1, 2, 3],
+        )
+        db.add_storyline(storyline)
+
+        reporter = StorylineReporter(database=db)
+        timeline = reporter.generate_timeline_view()
+
+        assert '# Storyline Timeline' in timeline
+        assert 'Test Feature' in timeline
+
+    def test_get_stats(self):
+        """Test statistics gathering."""
+        from gitview.storyline.reporter import StorylineReporter
+
+        db = StorylineDatabase()
+
+        completed = Storyline(
+            id='sl_1', title='Done', category=StorylineCategory.FEATURE,
+            status=StorylineStatus.COMPLETED, confidence=0.9,
+            first_phase=1, last_phase=1,
+        )
+        active = Storyline(
+            id='sl_2', title='Active', category=StorylineCategory.FEATURE,
+            status=StorylineStatus.ACTIVE, confidence=0.8,
+            first_phase=1, last_phase=2,
+        )
+
+        db.add_storyline(completed)
+        db.add_storyline(active)
+
+        reporter = StorylineReporter(database=db)
+        stats = reporter._get_stats()
+
+        assert stats['total'] == 2
+        assert stats['completed'] == 1
+        assert stats['active'] == 1

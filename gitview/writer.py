@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from .chunker import Phase
@@ -60,8 +60,9 @@ class OutputWriter:
             f.write("3. [Full Narrative](#full-narrative)\n")
             f.write("4. [Technical Evolution](#technical-evolution)\n")
             f.write("5. [Story of Deletions](#story-of-deletions)\n")
-            f.write("6. [Phase Details](#phase-details)\n")
-            f.write("7. [Statistics](#statistics)\n\n")
+            f.write("6. [Storylines](#storylines)\n")
+            f.write("7. [Phase Details](#phase-details)\n")
+            f.write("8. [Statistics](#statistics)\n\n")
             f.write("---\n\n")
 
             # Executive Summary
@@ -88,6 +89,12 @@ class OutputWriter:
             f.write("## Story of Deletions\n\n")
             f.write(stories['deletion_story'])
             f.write("\n\n---\n\n")
+
+            # Storylines section (if available)
+            if stories.get('storylines'):
+                f.write("## Storylines\n\n")
+                f.write(stories['storylines'])
+                f.write("\n\n---\n\n")
 
             # Phase Details
             f.write("## Phase Details\n\n")
@@ -186,7 +193,7 @@ class OutputWriter:
 
     @staticmethod
     def write_json(stories: Dict[str, str], phases: List[Phase], output_path: str,
-                   repo_path: str = None):
+                   repo_path: str = None, storyline_data: Optional[Dict[str, Any]] = None):
         """
         Write complete data to JSON file with metadata for incremental analysis.
 
@@ -195,6 +202,7 @@ class OutputWriter:
             phases: List of Phase objects
             output_path: Path to output JSON file
             repo_path: Path to git repository (for metadata)
+            storyline_data: Optional storyline tracking data
         """
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +224,10 @@ class OutputWriter:
         if repo_path:
             metadata['repository_path'] = str(Path(repo_path).resolve())
 
+        # Add storyline summary to metadata
+        if storyline_data and 'summary' in storyline_data:
+            metadata['storylines'] = storyline_data['summary']
+
         data = {
             'metadata': metadata,
             'total_phases': len(phases),
@@ -224,8 +236,75 @@ class OutputWriter:
             'phases': [p.to_dict() for p in phases],
         }
 
+        # Include full storyline data if available
+        if storyline_data:
+            data['storylines'] = storyline_data
+
         with open(output_file, 'w') as f:
             json.dump(data, f, indent=2)
+
+    @staticmethod
+    def write_storyline_report(storyline_data: Dict[str, Any], output_path: str):
+        """
+        Write a dedicated storyline report.
+
+        Args:
+            storyline_data: Storyline data from tracker or reporter
+            output_path: Path to output markdown file
+        """
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_file, 'w') as f:
+            f.write("# Storyline Report\n\n")
+            f.write(f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n")
+            f.write("---\n\n")
+
+            # Summary
+            if 'summary' in storyline_data:
+                summary = storyline_data['summary']
+                f.write("## Summary\n\n")
+                f.write(f"- **Total Storylines:** {summary.get('total', 0)}\n")
+                f.write(f"- **Completed:** {summary.get('completed', 0)}\n")
+                f.write(f"- **Active:** {summary.get('active', 0)}\n")
+                f.write(f"- **Stalled:** {summary.get('stalled', 0)}\n\n")
+                f.write("---\n\n")
+
+            # Storylines by status
+            storylines = storyline_data.get('storylines', [])
+
+            if storylines:
+                # Group by status
+                completed = [s for s in storylines if s.get('status') == 'completed']
+                active = [s for s in storylines if s.get('status') in ('active', 'progressing')]
+                stalled = [s for s in storylines if s.get('status') == 'stalled']
+
+                if completed:
+                    f.write("## Completed Storylines\n\n")
+                    for sl in completed:
+                        phases = sl.get('phases_involved', [])
+                        phase_str = f"Phases {phases[0]}-{phases[-1]}" if len(phases) > 1 else f"Phase {phases[0]}" if phases else ""
+                        f.write(f"### {sl['title']}\n\n")
+                        f.write(f"**Category:** {sl.get('category', 'unknown')} | **{phase_str}**\n\n")
+                        f.write(f"{sl.get('description', sl.get('last_update', ''))}\n\n")
+
+                if active:
+                    f.write("## Active Storylines\n\n")
+                    for sl in active:
+                        phases = sl.get('phases_involved', [])
+                        phase_str = f"Phases {phases[0]}-{phases[-1]}" if len(phases) > 1 else f"Phase {phases[0]}" if phases else ""
+                        f.write(f"### {sl['title']}\n\n")
+                        f.write(f"**Category:** {sl.get('category', 'unknown')} | **{phase_str}**\n\n")
+                        f.write(f"{sl.get('last_update', sl.get('description', ''))}\n\n")
+
+                if stalled:
+                    f.write("## Stalled Storylines\n\n")
+                    for sl in stalled:
+                        phases = sl.get('phases_involved', [])
+                        phase_str = f"Phases {phases[0]}-{phases[-1]}" if len(phases) > 1 else f"Phase {phases[0]}" if phases else ""
+                        f.write(f"### {sl['title']}\n\n")
+                        f.write(f"**Category:** {sl.get('category', 'unknown')} | **{phase_str}**\n\n")
+                        f.write(f"{sl.get('last_update', sl.get('description', ''))}\n\n")
 
     @staticmethod
     def write_simple_timeline(phases: List[Phase], output_path: str):
