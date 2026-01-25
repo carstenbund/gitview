@@ -1,4 +1,4 @@
-# use GitView Commit Format
+# use GitView Commit Message Format
 ```
 <type>(<scope>): <subject>
 
