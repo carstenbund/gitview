@@ -22,6 +22,7 @@ Example run on this repository:
 - **Smart Chunking**: Automatically divides history into meaningful "phases" or "epochs" based on significant changes
 - **LLM-Powered Summaries**: Uses Claude to generate narrative summaries for each phase
 - **Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
+- **Storyline Tracking**: Track narrative threads (features, refactoring efforts, bug campaigns) across phases with automatic detection and lifecycle management
 - **Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
 - **Critical Examination Mode**: Objective assessment focused on gaps, technical debt, and alignment with project goals (perfect for project leads)
 
@@ -570,6 +571,133 @@ The LLM will generate:
 - **Risk Assessment**: Identify concerning patterns and project risks
 - **Leadership Reports**: Provide factual assessment to stakeholders
 
+## Storyline Tracking
+
+GitView tracks "storylines" - narrative threads that span multiple phases of development. Instead of just seeing isolated phase summaries, you can follow the arc of features, refactoring efforts, bug fix campaigns, and other initiatives across your project's history.
+
+### What Are Storylines?
+
+Storylines are development threads that GitView automatically detects and tracks:
+
+- **Features**: New functionality being built across multiple phases
+- **Refactoring**: Code cleanup and restructuring efforts
+- **Bug Fixes**: Bug fix campaigns and stability improvements
+- **Tech Debt**: Debt reduction initiatives
+- **Infrastructure**: CI/CD, tooling, and deployment improvements
+- **Documentation**: Documentation efforts
+- **Migrations**: Database or framework migrations
+- **Performance**: Performance optimization work
+- **Security**: Security hardening initiatives
+
+### Multi-Signal Detection
+
+Storylines are detected from multiple sources with confidence scoring:
+
+| Source | Confidence | Description |
+|--------|------------|-------------|
+| PR Labels | 0.9 | GitHub PR labels (feature, bug, refactor) |
+| PR Title Patterns | 0.8 | Patterns like "feat:", "fix:", "[WIP]" |
+| File Clusters | 0.7 | Related files changing together |
+| Commit Messages | 0.6 | Conventional commit patterns |
+| LLM Extraction | 0.5 | AI-detected storylines from summaries |
+
+### Storyline Lifecycle
+
+Storylines progress through states automatically:
+
+```
+EMERGING → ACTIVE → PROGRESSING → COMPLETED
+                  ↘ STALLED → ABANDONED
+```
+
+- **Emerging**: New storyline detected, building confidence
+- **Active**: Confirmed storyline with ongoing work
+- **Progressing**: Active work continues phase-over-phase
+- **Completed**: Storyline reached completion (explicit or inferred)
+- **Stalled**: No activity for 3+ phases
+- **Abandoned**: Stalled for 6+ phases
+
+### CLI Commands
+
+GitView provides a `storyline` command group for exploring tracked storylines:
+
+```bash
+# List all storylines
+gitview storyline list
+
+# Filter by status
+gitview storyline list --status active
+gitview storyline list --status completed
+
+# Filter by category
+gitview storyline list --category feature
+gitview storyline list --category refactor
+
+# Show details for a specific storyline
+gitview storyline show <storyline-id>
+gitview storyline show oauth-impl  # partial ID match works
+
+# Generate comprehensive report
+gitview storyline report
+gitview storyline report --save storyline-report.md
+
+# View ASCII timeline visualization
+gitview storyline timeline
+
+# Export to JSON or CSV
+gitview storyline export --format json
+gitview storyline export --format csv --dest storylines.csv
+```
+
+### Example Output
+
+**Storyline List:**
+```
+┌────────┬──────────────────────────┬────────────┬────────┬──────┬──────────────┐
+│ Status │ Title                    │ Category   │ Phases │ Conf │ ID           │
+├────────┼──────────────────────────┼────────────┼────────┼──────┼──────────────┤
+│ ✓      │ OAuth Implementation     │ feature    │ 1→3    │ 90%  │ oauth-impl.. │
+│ ●      │ API Rate Limiting        │ feature    │ 2→4    │ 85%  │ api-rate-l.. │
+│ ▶      │ Test Coverage Expansion  │ tech_debt  │ 3→4    │ 75%  │ test-cover.. │
+│ ◌      │ Legacy Migration         │ migration  │ 1→2    │ 70%  │ legacy-mig.. │
+└────────┴──────────────────────────┴────────────┴────────┴──────┴──────────────┘
+```
+
+**ASCII Timeline:**
+```
+Storyline                                1  2  3  4  5
+────────────────────────────────────────────────────────
+OAuth Implementation                     ┌────┘
+API Rate Limiting                           ┌────→
+Test Coverage Expansion                        ┌──→
+Legacy Migration                         ┌──╳
+
+Legend: ┌─ start, ─┘ completed, ─→ ongoing, ─╳ stalled
+```
+
+### Output in Reports
+
+When you run `gitview analyze`, storylines are automatically:
+
+1. **Detected** from commits, PRs, and file patterns
+2. **Tracked** across phases with state transitions
+3. **Included** in the main `history_story.md` report
+4. **Persisted** to `output/phases/storylines.json` for incremental analysis
+
+The storyline section in your report includes:
+- Summary of completed, active, and stalled storylines
+- Timeline visualization
+- Cross-phase theme analysis
+- Category breakdown
+
+### Persistence & Incremental Analysis
+
+Storyline data is persisted to `output/phases/storylines.json`, enabling:
+
+- **Incremental updates**: New phases add to existing storyline data
+- **State continuity**: Storyline states persist across runs
+- **Export capabilities**: Use the data in other tools
+
 ## GitHub Enrichment (PR & Review Context)
 
 GitView can enrich commit history with Pull Request context from GitHub's GraphQL API, providing richer narratives based on actual PR descriptions and review feedback rather than just commit messages.
@@ -681,7 +809,8 @@ output/
 ├── phases/                       # Phase data
 │   ├── phase_01.json
 │   ├── phase_02.json
-│   └── phase_index.json
+│   ├── phase_index.json
+│   └── storylines.json          # Storyline tracking data
 ├── history_story.md              # Main narrative report
 ├── timeline.md                   # Simple timeline
 └── history_data.json             # Complete data in JSON
@@ -695,6 +824,7 @@ Contains:
 - **Full Narrative**: Complete story of the codebase evolution
 - **Technical Evolution**: Architectural journey and key decisions
 - **Story of Deletions**: What was removed and why
+- **Storylines**: Cross-phase narrative threads with timeline visualization
 - **Phase Details**: Detailed breakdown of each phase
 - **Statistics**: Comprehensive metrics
 
@@ -813,21 +943,21 @@ cat ./project-review-q1/history_story.md
 └──────────┬──────────┘
            │
            v
-┌─────────────────────┐
-│  Summarizer         │  LLM summarizes each phase
-│  (summarizer.py)    │  Uses Claude API
-└──────────┬──────────┘
-           │
-           v
-┌─────────────────────┐
-│  StoryTeller        │  Generates global narratives
-│  (storyteller.py)   │  Multiple story formats
-└──────────┬──────────┘
+┌─────────────────────┐     ┌─────────────────────┐
+│  Summarizer         │────>│  Storyline Tracker  │
+│  (summarizer.py)    │     │  (storyline/)       │
+└──────────┬──────────┘     │  Multi-signal       │
+           │                │  detection & state  │
+           v                │  machine lifecycle  │
+┌─────────────────────┐     └──────────┬──────────┘
+│  StoryTeller        │<───────────────┘
+│  (storyteller.py)   │  Generates global narratives
+└──────────┬──────────┘  with storyline context
            │
            v
 ┌─────────────────────┐
 │  Writer             │  Outputs markdown, JSON, etc.
-│  (writer.py)        │
+│  (writer.py)        │  Includes storyline reports
 └─────────────────────┘
 ```
 
@@ -927,6 +1057,14 @@ gitview analyze --backend openai --api-key "your-key"
 - **Resource Analysis**: Understand where development effort was spent
 - **Risk Management**: Identify concerning patterns and project risks
 - **Stakeholder Reports**: Provide factual, critical assessment to executives
+
+### Storyline Tracking
+- **Feature Tracking**: Follow features from inception to completion across phases
+- **Refactoring Visibility**: Track long-running refactoring efforts and their progress
+- **Stalled Work Detection**: Identify initiatives that have stalled or been abandoned
+- **Cross-Phase Analysis**: Understand how work threads connect across time
+- **Project Health**: See the balance of active, completed, and stalled storylines
+- **Timeline Visualization**: ASCII timeline showing storyline arcs
 
 ### File Tracking & Header Injection
 - **Deep Code Analysis**: Inject complete change history into files for debugging complex issues
