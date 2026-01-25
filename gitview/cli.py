@@ -23,6 +23,12 @@ from .branches import BranchManager, parse_branch_spec
 from .index_writer import IndexWriter
 from .github_enricher import GitHubEnricher, enrich_commits_with_github
 from .file_tracker import FileHistoryTracker
+from .storyline import (
+    StorylineTracker,
+    StorylineReporter,
+    StorylineDatabase,
+    generate_storyline_section_for_markdown,
+)
 
 console = Console()
 
@@ -2439,6 +2445,427 @@ def compare_branches(branch_a, branch_b, repo, output, patterns, exclude, top_n)
         import traceback
         console.print(traceback.format_exc())
         sys.exit(1)
+
+
+# ============================================================================
+# Storyline Commands
+# ============================================================================
+
+@cli.group('storyline')
+def storyline_group():
+    """Manage and explore storylines tracked across phases.
+
+    \b
+    Storylines are narrative threads that span multiple phases of development,
+    such as feature implementations, refactoring efforts, or bug fix campaigns.
+
+    \b
+    Examples:
+      gitview storyline list              # List all storylines
+      gitview storyline show <id>         # Show details for a storyline
+      gitview storyline report            # Generate comprehensive report
+      gitview storyline export --json     # Export storylines to JSON
+    """
+    pass
+
+
+@storyline_group.command('list')
+@click.option('--output', default='output', help='Output directory containing storyline data')
+@click.option('--status', type=click.Choice(['all', 'active', 'completed', 'stalled', 'abandoned']),
+              default='all', help='Filter by status')
+@click.option('--category', default=None, help='Filter by category (feature, refactor, bugfix, etc.)')
+@click.option('--limit', default=20, type=int, help='Maximum number of storylines to show')
+def storyline_list(output, status, category, limit):
+    """List all tracked storylines.
+
+    \b
+    Shows a summary table of storylines with their status, category,
+    phase range, and confidence score.
+
+    \b
+    Examples:
+      gitview storyline list                    # List all storylines
+      gitview storyline list --status active    # List only active storylines
+      gitview storyline list --category feature # List only feature storylines
+    """
+    console.print("\n[bold cyan]Storylines[/bold cyan]")
+    console.print("=" * 70)
+
+    # Try to load storyline database
+    db_path = Path(output) / "phases" / "storylines.json"
+    json_path = Path(output) / "history_data.json"
+
+    database = None
+
+    if db_path.exists():
+        try:
+            database = StorylineDatabase.load(str(db_path))
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load storyline database: {e}[/yellow]")
+
+    if database is None and json_path.exists():
+        # Try loading from main JSON file
+        try:
+            import json
+            with open(json_path) as f:
+                data = json.load(f)
+            if 'storylines' in data:
+                console.print("[cyan]Loading storylines from history_data.json...[/cyan]")
+                # Convert legacy format
+                storylines_data = data.get('storylines', {}).get('storylines', [])
+                if storylines_data:
+                    database = StorylineDatabase()
+                    from .storyline import Storyline, StorylineCategory, StorylineStatus
+                    for sl_data in storylines_data:
+                        from .storyline.models import Storyline as StorylineModel
+                        storyline = StorylineModel(
+                            id=StorylineModel.generate_id(sl_data['title'], sl_data.get('first_phase', 1)),
+                            title=sl_data['title'],
+                            category=StorylineCategory.from_string(sl_data.get('category', 'feature')),
+                            status=StorylineStatus[sl_data.get('status', 'active').upper()]
+                                   if sl_data.get('status', '').upper() in StorylineStatus.__members__
+                                   else StorylineStatus.ACTIVE,
+                            confidence=sl_data.get('confidence', 0.7),
+                            first_phase=sl_data.get('first_phase', 1),
+                            last_phase=sl_data.get('last_phase', 1),
+                            phases_involved=sl_data.get('phases_involved', []),
+                            description=sl_data.get('description', ''),
+                            current_summary=sl_data.get('last_update', sl_data.get('description', '')),
+                        )
+                        database.add_storyline(storyline)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load from history_data.json: {e}[/yellow]")
+
+    if database is None or not database.storylines:
+        console.print("\n[yellow]No storylines found.[/yellow]")
+        console.print("\nRun 'gitview analyze' first to generate storylines.")
+        return
+
+    # Filter storylines
+    storylines = list(database.storylines.values())
+
+    if status != 'all':
+        from .storyline import StorylineStatus
+        status_map = {
+            'active': [StorylineStatus.ACTIVE, StorylineStatus.PROGRESSING],
+            'completed': [StorylineStatus.COMPLETED],
+            'stalled': [StorylineStatus.STALLED],
+            'abandoned': [StorylineStatus.ABANDONED],
+        }
+        target_statuses = status_map.get(status, [])
+        storylines = [sl for sl in storylines if sl.status in target_statuses]
+
+    if category:
+        from .storyline import StorylineCategory
+        target_category = StorylineCategory.from_string(category)
+        storylines = [sl for sl in storylines if sl.category == target_category]
+
+    # Sort by last_phase descending
+    storylines.sort(key=lambda x: (-x.last_phase, x.title))
+    storylines = storylines[:limit]
+
+    if not storylines:
+        console.print(f"\n[yellow]No storylines match the filters.[/yellow]")
+        return
+
+    # Create table
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Status", style="dim", width=8)
+    table.add_column("Title", style="cyan", max_width=35)
+    table.add_column("Category", style="magenta", width=12)
+    table.add_column("Phases", style="green", width=10)
+    table.add_column("Conf", style="yellow", width=5)
+    table.add_column("ID", style="dim", width=12)
+
+    status_icons = {
+        'completed': '[green]✓[/green]',
+        'active': '[blue]●[/blue]',
+        'progressing': '[blue]▶[/blue]',
+        'stalled': '[yellow]◌[/yellow]',
+        'abandoned': '[red]✗[/red]',
+        'emerging': '[dim]○[/dim]',
+    }
+
+    for sl in storylines:
+        icon = status_icons.get(sl.status.value, '?')
+        phases = f"{sl.first_phase}→{sl.last_phase}" if sl.first_phase != sl.last_phase else str(sl.first_phase)
+        conf = f"{sl.confidence:.0%}"
+        short_id = sl.id[:10] + ".." if len(sl.id) > 12 else sl.id
+
+        table.add_row(
+            icon,
+            sl.title[:33] + ".." if len(sl.title) > 35 else sl.title,
+            sl.category.value,
+            phases,
+            conf,
+            short_id,
+        )
+
+    console.print(table)
+
+    # Summary
+    console.print(f"\n[dim]Showing {len(storylines)} of {len(database.storylines)} storylines[/dim]")
+    console.print("[dim]Use 'gitview storyline show <ID>' for details[/dim]")
+
+
+@storyline_group.command('show')
+@click.argument('storyline_id')
+@click.option('--output', default='output', help='Output directory containing storyline data')
+def storyline_show(storyline_id, output):
+    """Show detailed information about a specific storyline.
+
+    \b
+    Displays the full narrative, timeline of updates, key files,
+    and related pull requests for the specified storyline.
+
+    \b
+    Example:
+      gitview storyline show feature-auth-system
+    """
+    console.print("\n[bold cyan]Storyline Details[/bold cyan]")
+    console.print("=" * 70)
+
+    # Load database
+    db_path = Path(output) / "phases" / "storylines.json"
+
+    if not db_path.exists():
+        console.print(f"[red]Storyline database not found at {db_path}[/red]")
+        console.print("Run 'gitview analyze' first to generate storylines.")
+        return
+
+    try:
+        database = StorylineDatabase.load(str(db_path))
+    except Exception as e:
+        console.print(f"[red]Error loading database: {e}[/red]")
+        return
+
+    # Find storyline by ID or partial match
+    storyline = database.storylines.get(storyline_id)
+
+    if not storyline:
+        # Try partial ID match
+        matches = [sl for sl in database.storylines.values()
+                   if storyline_id.lower() in sl.id.lower() or storyline_id.lower() in sl.title.lower()]
+
+        if len(matches) == 1:
+            storyline = matches[0]
+        elif len(matches) > 1:
+            console.print(f"[yellow]Multiple matches found for '{storyline_id}':[/yellow]")
+            for m in matches[:5]:
+                console.print(f"  - {m.id}: {m.title}")
+            return
+        else:
+            console.print(f"[red]Storyline '{storyline_id}' not found.[/red]")
+            console.print("\nUse 'gitview storyline list' to see available storylines.")
+            return
+
+    # Generate detailed narrative
+    reporter = StorylineReporter(database=database)
+    narrative = reporter.generate_storyline_narrative(storyline.id)
+
+    console.print(narrative)
+
+
+@storyline_group.command('report')
+@click.option('--output', default='output', help='Output directory')
+@click.option('--format', 'fmt', type=click.Choice(['markdown', 'terminal']),
+              default='terminal', help='Output format')
+@click.option('--include-timeline/--no-timeline', default=True,
+              help='Include ASCII timeline visualization')
+@click.option('--include-themes/--no-themes', default=True,
+              help='Include cross-phase theme analysis')
+@click.option('--save', default=None, help='Save report to file')
+def storyline_report(output, fmt, include_timeline, include_themes, save):
+    """Generate a comprehensive storyline report.
+
+    \b
+    Creates a detailed report including:
+      - Storyline index with status summary
+      - ASCII timeline visualization
+      - Cross-phase theme analysis
+      - Category breakdown
+
+    \b
+    Examples:
+      gitview storyline report                      # Display in terminal
+      gitview storyline report --save report.md    # Save to file
+      gitview storyline report --no-timeline       # Skip timeline
+    """
+    console.print("\n[bold cyan]Generating Storyline Report...[/bold cyan]")
+    console.print("=" * 70)
+
+    # Load database
+    db_path = Path(output) / "phases" / "storylines.json"
+
+    if not db_path.exists():
+        console.print(f"[red]Storyline database not found at {db_path}[/red]")
+        console.print("Run 'gitview analyze' first to generate storylines.")
+        return
+
+    try:
+        database = StorylineDatabase.load(str(db_path))
+    except Exception as e:
+        console.print(f"[red]Error loading database: {e}[/red]")
+        return
+
+    if not database.storylines:
+        console.print("[yellow]No storylines found in database.[/yellow]")
+        return
+
+    # Generate report
+    reporter = StorylineReporter(database=database)
+
+    if fmt == 'markdown' or save:
+        report = reporter.generate_full_report()
+    else:
+        # For terminal, generate each section
+        sections = []
+        sections.append(reporter.generate_storyline_index())
+        if include_timeline:
+            sections.append(reporter.generate_timeline_view())
+        if include_themes:
+            sections.append(reporter.generate_cross_phase_themes())
+        report = '\n\n---\n\n'.join(sections)
+
+    if save:
+        save_path = Path(save)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(save_path, 'w') as f:
+            f.write(report)
+        console.print(f"\n[green]Report saved to: {save_path}[/green]")
+    else:
+        console.print()
+        console.print(report)
+
+
+@storyline_group.command('export')
+@click.option('--output', default='output', help='Output directory containing storyline data')
+@click.option('--format', 'fmt', type=click.Choice(['json', 'csv']),
+              default='json', help='Export format')
+@click.option('--dest', default=None, help='Destination file path')
+@click.option('--status', type=click.Choice(['all', 'active', 'completed', 'stalled']),
+              default='all', help='Filter by status')
+def storyline_export(output, fmt, dest, status):
+    """Export storylines to JSON or CSV format.
+
+    \b
+    Exports storyline data for use in other tools or analysis.
+
+    \b
+    Examples:
+      gitview storyline export --json                    # Export all to JSON
+      gitview storyline export --csv --dest stories.csv  # Export to CSV
+      gitview storyline export --status active           # Export only active
+    """
+    console.print("\n[bold cyan]Exporting Storylines...[/bold cyan]")
+
+    # Load database
+    db_path = Path(output) / "phases" / "storylines.json"
+
+    if not db_path.exists():
+        console.print(f"[red]Storyline database not found at {db_path}[/red]")
+        return
+
+    try:
+        database = StorylineDatabase.load(str(db_path))
+    except Exception as e:
+        console.print(f"[red]Error loading database: {e}[/red]")
+        return
+
+    # Filter storylines
+    storylines = list(database.storylines.values())
+
+    if status != 'all':
+        from .storyline import StorylineStatus
+        status_map = {
+            'active': [StorylineStatus.ACTIVE, StorylineStatus.PROGRESSING],
+            'completed': [StorylineStatus.COMPLETED],
+            'stalled': [StorylineStatus.STALLED],
+        }
+        target_statuses = status_map.get(status, [])
+        storylines = [sl for sl in storylines if sl.status in target_statuses]
+
+    if not storylines:
+        console.print("[yellow]No storylines to export.[/yellow]")
+        return
+
+    # Determine output path
+    if dest:
+        dest_path = Path(dest)
+    else:
+        dest_path = Path(output) / f"storylines_export.{fmt}"
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if fmt == 'json':
+        import json
+        export_data = {
+            'exported_at': __import__('datetime').datetime.now().isoformat(),
+            'total': len(storylines),
+            'storylines': [sl.to_dict() for sl in storylines],
+        }
+        with open(dest_path, 'w') as f:
+            json.dump(export_data, f, indent=2)
+    else:  # CSV
+        import csv
+        with open(dest_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'id', 'title', 'category', 'status', 'confidence',
+                'first_phase', 'last_phase', 'phase_count', 'description'
+            ])
+            for sl in storylines:
+                writer.writerow([
+                    sl.id, sl.title, sl.category.value, sl.status.value,
+                    f"{sl.confidence:.2f}", sl.first_phase, sl.last_phase,
+                    len(sl.phases_involved), sl.description[:200]
+                ])
+
+    console.print(f"\n[green]Exported {len(storylines)} storylines to: {dest_path}[/green]")
+
+
+@storyline_group.command('timeline')
+@click.option('--output', default='output', help='Output directory containing storyline data')
+def storyline_timeline(output):
+    """Display ASCII timeline of storyline arcs.
+
+    \b
+    Shows a visual representation of how storylines span across phases,
+    with indicators for start, end, completion, and stalls.
+
+    \b
+    Legend:
+      ┌─  start
+      ─┘  completed
+      ─→  ongoing
+      ─╳  stalled
+      ·   gap
+    """
+    console.print("\n[bold cyan]Storyline Timeline[/bold cyan]")
+    console.print("=" * 70)
+
+    # Load database
+    db_path = Path(output) / "phases" / "storylines.json"
+
+    if not db_path.exists():
+        console.print(f"[red]Storyline database not found at {db_path}[/red]")
+        return
+
+    try:
+        database = StorylineDatabase.load(str(db_path))
+    except Exception as e:
+        console.print(f"[red]Error loading database: {e}[/red]")
+        return
+
+    if not database.storylines:
+        console.print("[yellow]No storylines to display.[/yellow]")
+        return
+
+    reporter = StorylineReporter(database=database)
+    timeline = reporter.generate_timeline_view()
+
+    console.print()
+    console.print(timeline)
 
 
 def main():
