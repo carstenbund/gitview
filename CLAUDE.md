@@ -34,3 +34,13 @@ Track initiative lifecycle with these statuses:
 | `completed` | Initiative finished | Final commit completing the work |
 | `stalled` | Work paused/blocked | When stopping temporarily |
 
+---
+
+Quick Reference:
+Status: new, continued, completed, stalled
+Category: feature, refactor, bugfix, debt, infrastructure, docs, test
+Key Rules:
+Keep storyline titles consistent across commits
+One initiative per commit
+Mark completions explicitly
+Group related changes together
