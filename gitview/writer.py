@@ -193,7 +193,7 @@ class OutputWriter:
 
     @staticmethod
     def write_json(stories: Dict[str, str], phases: List[Phase], output_path: str,
-                   repo_path: str = None, storyline_data: Optional[Dict[str, Any]] = None):
+                   repo_path: str = None, storylines: Optional[Dict[str, Any]] = None):
         """
         Write complete data to JSON file with metadata for incremental analysis.
 
@@ -202,7 +202,7 @@ class OutputWriter:
             phases: List of Phase objects
             output_path: Path to output JSON file
             repo_path: Path to git repository (for metadata)
-            storyline_data: Optional storyline tracking data
+            storylines: Optional storyline tracking data from StorylineTracker
         """
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -225,8 +225,18 @@ class OutputWriter:
             metadata['repository_path'] = str(Path(repo_path).resolve())
 
         # Add storyline summary to metadata
-        if storyline_data and 'summary' in storyline_data:
-            metadata['storylines'] = storyline_data['summary']
+        if storylines:
+            # Count storylines by status
+            total = sum(len(sl_list) for sl_list in storylines.values())
+            completed = len(storylines.get('completed', []))
+            active = len(storylines.get('active', []))
+            stalled = len(storylines.get('stalled', []))
+            metadata['storylines'] = {
+                'total': total,
+                'completed': completed,
+                'active': active,
+                'stalled': stalled,
+            }
 
         data = {
             'metadata': metadata,
@@ -237,8 +247,8 @@ class OutputWriter:
         }
 
         # Include full storyline data if available
-        if storyline_data:
-            data['storylines'] = storyline_data
+        if storylines:
+            data['storylines'] = storylines
 
         with open(output_file, 'w') as f:
             json.dump(data, f, indent=2)
