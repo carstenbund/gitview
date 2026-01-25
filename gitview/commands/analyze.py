@@ -624,7 +624,7 @@ class AnalyzeCommand(BaseCommand):
 
     def _show_cost_estimate(self, records, backend, model, api_key):
         """Show estimated LLM cost before analysis."""
-        avg_msg_length = sum(len(r.message) for r in records) // max(1, len(records))
+        avg_msg_length = sum(len(r.commit_message) for r in records) // max(1, len(records))
 
         from ..backends.router import LLMRouter
         router_for_estimate = LLMRouter(backend=backend, model=model, api_key=api_key)
