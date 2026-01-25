@@ -17,7 +17,8 @@ class StoryTeller:
     def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
                  api_key: Optional[str] = None, todo_content: Optional[str] = None,
                  critical_mode: bool = False, directives: Optional[str] = None,
-                 max_phases_per_prompt: int = 12, **kwargs):
+                 max_phases_per_prompt: int = 12, storylines: Optional[List[Dict[str, Any]]] = None,
+                 **kwargs):
         """
         Initialize storyteller with LLM backend.
 
@@ -28,6 +29,7 @@ class StoryTeller:
             todo_content: Optional content from todo/goals file for critical examination
             critical_mode: Enable critical examination mode (focus on gaps and issues)
             directives: Additional directives to inject into prompts
+            storylines: Optional list of tracked storylines for narrative continuity
             **kwargs: Additional backend parameters
         """
         self.router = LLMRouter(backend=backend, model=model, api_key=api_key, **kwargs)
@@ -35,6 +37,7 @@ class StoryTeller:
         self.todo_content = self._truncate_content(todo_content, 2000)
         self.critical_mode = critical_mode
         self.directives = self._truncate_content(directives, 2000)
+        self.storylines = storylines or []
         # Limit how many phases are fed to the model in a single request to avoid
         # context blowups on very large histories.
         self.max_phases_per_prompt = max_phases_per_prompt
@@ -165,9 +168,10 @@ class StoryTeller:
                 'has_large_addition': phase.has_large_addition,
                 'has_refactor': phase.has_refactor,
                 'readme_changed': phase.readme_changed,
-                # Keep summaries short to stay within model context limits when
-                # processing many phases or generating longer completions.
-                'summary': self._truncate_content(phase.summary, 400),
+                # Keep summaries reasonably sized for model context limits while
+            # preserving enough detail for narrative continuity.
+            # Increased from 400 to 600 chars to retain more storyline context.
+            'summary': self._truncate_content(phase.summary, 600),
             }
 
             # Check for GitHub enrichment and collect key PR data
@@ -314,6 +318,42 @@ class StoryTeller:
                 )
                 max_tokens = next_max_tokens
 
+    def _format_storylines_for_prompt(self) -> str:
+        """Format tracked storylines for inclusion in prompts."""
+        if not self.storylines:
+            return ""
+
+        lines = ["**Tracked Storylines (narrative threads across phases):**"]
+
+        # Group by status
+        completed = [s for s in self.storylines if s.get('status') == 'completed']
+        active = [s for s in self.storylines if s.get('status') == 'active']
+        stalled = [s for s in self.storylines if s.get('status') == 'stalled']
+
+        if completed:
+            lines.append("\n*Completed:*")
+            for sl in completed[:5]:  # Limit to 5
+                phases = sl.get('phases_involved', [])
+                phase_str = f"Phases {phases[0]}→{phases[-1]}" if len(phases) > 1 else f"Phase {phases[0]}"
+                lines.append(f"- [{sl.get('category', 'feature')}] **{sl['title']}** ({phase_str}): {sl.get('description', '')[:100]}")
+
+        if active:
+            lines.append("\n*Active/Ongoing:*")
+            for sl in active[:5]:
+                phases = sl.get('phases_involved', [])
+                phase_str = f"Phases {phases[0]}→{phases[-1]}" if len(phases) > 1 else f"Phase {phases[0]}"
+                lines.append(f"- [{sl.get('category', 'feature')}] **{sl['title']}** ({phase_str}): {sl.get('last_update', sl.get('description', ''))[:100]}")
+
+        if stalled:
+            lines.append("\n*Stalled/Blocked:*")
+            for sl in stalled[:3]:
+                phases = sl.get('phases_involved', [])
+                phase_str = f"Phases {phases[0]}→{phases[-1]}" if len(phases) > 1 else f"Phase {phases[0]}"
+                lines.append(f"- [{sl.get('category', 'feature')}] **{sl['title']}** ({phase_str}): {sl.get('last_update', sl.get('description', ''))[:100]}")
+
+        lines.append("")
+        return "\n".join(lines)
+
     @staticmethod
     def _truncate_content(content: Optional[str], max_chars: int) -> Optional[str]:
         """Ensure arbitrary content does not exceed the model context.
@@ -438,6 +478,11 @@ class StoryTeller:
 **Additional Analysis Directives:**
 {self.directives}
 """
+
+        # Add storyline context for narrative continuity
+        storyline_context = self._format_storylines_for_prompt()
+        if storyline_context:
+            prompt += f"\n{storyline_context}\n"
 
         prompt += """
 **Phase Summaries:**
@@ -714,6 +759,15 @@ Write the deletion story now:"""
             prompt += f"""
 **Additional Analysis Directives:**
 {self.directives}
+"""
+
+        # Add storyline context - critical for weaving narrative threads
+        storyline_context = self._format_storylines_for_prompt()
+        if storyline_context:
+            prompt += f"""
+{storyline_context}
+IMPORTANT: Use these storylines to weave a coherent narrative. Show how initiatives evolved
+across phases, which ones completed successfully, which stalled, and how they interconnected.
 """
 
         prompt += """

@@ -719,6 +719,20 @@ def _analyze_single_branch(
     # Step 4: Generate global story
     console.print("[bold]Step 4: Generating global narrative...[/bold]")
 
+    # Load storylines for narrative continuity (if available)
+    storylines_path = Path(output) / "phases" / "storylines.json"
+    storylines = None
+    if storylines_path.exists():
+        try:
+            import json
+            with open(storylines_path, 'r') as f:
+                storyline_data = json.load(f)
+                storylines = storyline_data.get('storylines', [])
+                if storylines:
+                    console.print(f"[cyan]Loaded {len(storylines)} storylines for narrative continuity[/cyan]")
+        except Exception as e:
+            console.print(f"[yellow]Could not load storylines: {e}[/yellow]")
+
     if use_hierarchical:
         storyteller = HierarchicalStoryTeller(
             backend=backend,
@@ -753,7 +767,8 @@ def _analyze_single_branch(
             ollama_url=ollama_url,
             todo_content=todo_content,
             critical_mode=critical_mode,
-            directives=directives
+            directives=directives,
+            storylines=storylines
         )
 
         with Progress(
@@ -1415,6 +1430,20 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
         # Step 4: Generate global story
         console.print("[bold]Step 4: Generating global narrative...[/bold]")
 
+        # Load storylines for narrative continuity (if available)
+        storylines_path = Path(output) / "phases" / "storylines.json"
+        storylines = None
+        if storylines_path.exists():
+            try:
+                import json
+                with open(storylines_path, 'r') as f:
+                    storyline_data = json.load(f)
+                    storylines = storyline_data.get('storylines', [])
+                    if storylines:
+                        console.print(f"[cyan]Loaded {len(storylines)} storylines for narrative continuity[/cyan]")
+            except Exception as e:
+                console.print(f"[yellow]Could not load storylines: {e}[/yellow]")
+
         if use_hierarchical:
             storyteller = HierarchicalStoryTeller(
                 backend=backend,
@@ -1449,7 +1478,8 @@ def analyze(repo, output, strategy, chunk_size, max_commits, branch, list_branch
                 ollama_url=ollama_url,
                 todo_content=todo_content,
                 critical_mode=critical,
-                directives=directives
+                directives=directives,
+                storylines=storylines
             )
 
             with Progress(

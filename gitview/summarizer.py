@@ -2,11 +2,107 @@
 
 import json
 import os
+import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from .chunker import Phase
 from .backends import LLMRouter, LLMMessage
+
+
+def _parse_storylines(summary: str) -> List[Dict[str, Any]]:
+    """
+    Parse storylines from a phase summary.
+
+    Looks for patterns like:
+    - [NEW:feature] storyline-name: description
+    - [CONTINUED:refactor] storyline-name: description
+    - [COMPLETED:bugfix] storyline-name: description
+    - [STALLED:feature] storyline-name: description
+
+    Returns list of storyline dicts.
+    """
+    storylines = []
+
+    # Find the Storylines section
+    storyline_match = re.search(r'##\s*Storylines\s*\n(.*?)(?=\n##|\Z)', summary, re.DOTALL | re.IGNORECASE)
+    if not storyline_match:
+        return storylines
+
+    storyline_section = storyline_match.group(1)
+
+    # Parse individual storyline entries
+    # Pattern: - [STATUS:category] name: description
+    pattern = r'-\s*\[(\w+):(\w+)\]\s*([^:]+):\s*(.+?)(?=\n-|\Z)'
+    matches = re.findall(pattern, storyline_section, re.DOTALL)
+
+    for status, category, name, description in matches:
+        storylines.append({
+            'status': status.lower(),  # new, continued, completed, stalled
+            'category': category.lower(),  # feature, refactor, bugfix, debt, infrastructure, docs
+            'title': name.strip(),
+            'description': description.strip()[:200],
+        })
+
+    return storylines
+
+
+def _update_storyline_tracker(tracker: Dict[str, Dict[str, Any]],
+                               new_storylines: List[Dict[str, Any]],
+                               phase_number: int) -> Dict[str, Dict[str, Any]]:
+    """
+    Update the storyline tracker with new storylines from a phase.
+
+    Args:
+        tracker: Current storyline tracker {title: storyline_data}
+        new_storylines: Storylines parsed from latest phase
+        phase_number: Current phase number
+
+    Returns:
+        Updated tracker
+    """
+    for sl in new_storylines:
+        title = sl['title'].lower()
+
+        if title in tracker:
+            # Update existing storyline
+            existing = tracker[title]
+            existing['phases_involved'].append(phase_number)
+            existing['last_update'] = sl['description']
+            existing['last_phase'] = phase_number
+
+            # Update status based on new info
+            if sl['status'] == 'completed':
+                existing['status'] = 'completed'
+            elif sl['status'] == 'stalled':
+                existing['status'] = 'stalled'
+            elif sl['status'] == 'continued':
+                existing['status'] = 'active'
+        else:
+            # New storyline
+            tracker[title] = {
+                'title': sl['title'],
+                'category': sl['category'],
+                'status': 'active' if sl['status'] in ('new', 'continued') else sl['status'],
+                'description': sl['description'],
+                'last_update': sl['description'],
+                'first_phase': phase_number,
+                'last_phase': phase_number,
+                'phases_involved': [phase_number],
+            }
+
+    return tracker
+
+
+def _get_active_storylines(tracker: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Get list of active (non-completed) storylines, sorted by recency."""
+    active = [
+        sl for sl in tracker.values()
+        if sl['status'] in ('active', 'stalled', 'new')
+    ]
+    # Sort by last_phase descending (most recent first)
+    active.sort(key=lambda x: x['last_phase'], reverse=True)
+    return active
 
 
 class PhaseSummarizer:
@@ -69,16 +165,28 @@ class PhaseSummarizer:
             List of Phase objects with summaries filled in
         """
         previous_summaries = []
+        storyline_tracker: Dict[str, Dict[str, Any]] = {}
 
         for i, phase in enumerate(phases):
             print(f"Summarizing phase {phase.phase_number}/{len(phases)}...")
 
-            # Build context from previous phases
-            context = self._build_context(previous_summaries)
+            # Get active storylines for context
+            active_storylines = _get_active_storylines(storyline_tracker)
+
+            # Build context from previous phases AND active storylines
+            context = self._build_context(previous_summaries, active_storylines)
 
             # Generate summary
             summary = self.summarize_phase(phase, context)
             phase.summary = summary
+
+            # Parse storylines from the summary and update tracker
+            parsed_storylines = _parse_storylines(summary)
+            if parsed_storylines:
+                storyline_tracker = _update_storyline_tracker(
+                    storyline_tracker, parsed_storylines, phase.phase_number
+                )
+                print(f"    Tracked {len(parsed_storylines)} storyline(s)")
 
             # Store for next iteration
             previous_summaries.append({
@@ -91,7 +199,29 @@ class PhaseSummarizer:
             if output_dir:
                 self._save_phase_with_summary(phase, output_dir)
 
+        # Save storyline tracker if output_dir provided
+        if output_dir and storyline_tracker:
+            self._save_storyline_tracker(storyline_tracker, output_dir)
+
         return phases
+
+    def _save_storyline_tracker(self, tracker: Dict[str, Dict[str, Any]], output_dir: str):
+        """Save the storyline tracker to a JSON file."""
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        tracker_file = output_path / "storylines.json"
+        with open(tracker_file, 'w') as f:
+            json.dump({
+                'storylines': list(tracker.values()),
+                'summary': {
+                    'total': len(tracker),
+                    'active': len([s for s in tracker.values() if s['status'] == 'active']),
+                    'completed': len([s for s in tracker.values() if s['status'] == 'completed']),
+                    'stalled': len([s for s in tracker.values() if s['status'] == 'stalled']),
+                }
+            }, f, indent=2)
+        print(f"  Saved storyline tracker with {len(tracker)} storyline(s)")
 
     def _prepare_phase_data(self, phase: Phase) -> Dict[str, Any]:
         """Prepare phase data for LLM prompt."""
@@ -333,6 +463,16 @@ Write a critical assessment (3-5 paragraphs) that:
 
 Be objective and factual. Focus on gaps, issues, and misalignments rather than achievements.
 
+After your assessment, add a **## Storylines** section tracking ongoing initiatives:
+```
+## Storylines
+- [NEW:feature] storyline-name: Brief description of new feature/initiative started
+- [CONTINUED:refactor] storyline-name: Update on ongoing work
+- [COMPLETED:bugfix] storyline-name: Resolution of completed work
+- [STALLED:feature] storyline-name: Work that appears paused/blocked
+```
+Categories: feature, refactor, bugfix, debt, infrastructure, docs
+
 Write the critical assessment now:"""
         else:
             # Check if we have GitHub context
@@ -354,6 +494,16 @@ They provide richer context about the motivation and reasoning behind the code.
 
 Focus on the "why" and "what changed" rather than just listing commits. Make it read like a story of the codebase's evolution.
 
+After your summary, add a **## Storylines** section tracking ongoing initiatives:
+```
+## Storylines
+- [NEW:feature] storyline-name: Brief description of new feature/initiative started
+- [CONTINUED:refactor] storyline-name: Update on ongoing work
+- [COMPLETED:bugfix] storyline-name: Resolution of completed work
+- [STALLED:feature] storyline-name: Work that appears paused/blocked
+```
+Categories: feature, refactor, bugfix, debt, infrastructure, docs
+
 Write the summary now:"""
             else:
                 prompt += """
@@ -370,22 +520,50 @@ Write a concise narrative summary (3-5 paragraphs) that:
 
 Focus on the "why" and "what changed" rather than just listing commits. Make it read like a story of the codebase's evolution.
 
+After your summary, add a **## Storylines** section tracking ongoing initiatives:
+```
+## Storylines
+- [NEW:feature] storyline-name: Brief description of new feature/initiative started
+- [CONTINUED:refactor] storyline-name: Update on ongoing work
+- [COMPLETED:bugfix] storyline-name: Resolution of completed work
+- [STALLED:feature] storyline-name: Work that appears paused/blocked
+```
+Categories: feature, refactor, bugfix, debt, infrastructure, docs
+
 Write the summary now:"""
 
         return prompt
 
-    def _build_context(self, previous_summaries: List[Dict[str, Any]]) -> str:
-        """Build context string from previous phase summaries."""
-        if not previous_summaries:
+    def _build_context(self, previous_summaries: List[Dict[str, Any]],
+                        active_storylines: Optional[List[Dict[str, Any]]] = None) -> str:
+        """Build context string from previous phase summaries and active storylines."""
+        if not previous_summaries and not active_storylines:
             return ""
 
         context_parts = []
-        for summary_info in previous_summaries[-3:]:  # Last 3 phases
-            context_parts.append(
-                f"Phase {summary_info['phase_number']} "
-                f"(LOC D: {summary_info['loc_delta']:+,d}): "
-                f"{summary_info['summary'][:200]}..."
-            )
+
+        # Add active storylines first (most important for continuity)
+        if active_storylines:
+            storyline_parts = ["**Active Storylines:**"]
+            for sl in active_storylines[:8]:  # Limit to 8 most recent
+                status_icon = {"active": "[ONGOING]", "stalled": "[STALLED]",
+                              "new": "[NEW]"}.get(sl.get('status', 'active'), "[ONGOING]")
+                storyline_parts.append(
+                    f"- {status_icon} **{sl['title']}** ({sl['category']}): "
+                    f"{sl.get('last_update', sl.get('description', ''))[:150]}"
+                )
+            context_parts.append("\n".join(storyline_parts))
+
+        # Add recent phase summaries (increased from 3 to 6, truncation from 200 to 400)
+        if previous_summaries:
+            phase_parts = ["**Recent Phase Context:**"]
+            for summary_info in previous_summaries[-6:]:  # Last 6 phases (was 3)
+                phase_parts.append(
+                    f"Phase {summary_info['phase_number']} "
+                    f"(LOC D: {summary_info['loc_delta']:+,d}): "
+                    f"{summary_info['summary'][:400]}..."  # Was 200
+                )
+            context_parts.append("\n\n".join(phase_parts))
 
         return "\n\n".join(context_parts)
 
