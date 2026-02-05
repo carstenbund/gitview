@@ -65,6 +65,12 @@ class AnalyzeCommand(BaseCommand):
         """Execute repository analysis."""
         self.console.print("\n[bold blue]GitView - Repository History Analyzer[/bold blue]\n")
 
+        # Check for adaptive mode
+        adaptive_mode = self.get_option('adaptive', False)
+        if adaptive_mode:
+            self.print_info("Adaptive agent mode enabled - discovery-driven analysis")
+            return self._execute_adaptive()
+
         # Normalize summarization strategy
         summarization_strategy = self.get_option('summarization_strategy', 'simple')
         if self.get_option('hierarchical', False):
@@ -153,6 +159,148 @@ class AnalyzeCommand(BaseCommand):
             self._repo_handler.cleanup()
         elif self._cloned_repo_path and keep_clone:
             self.print_info(f"\nTemporary clone preserved at: {self._cloned_repo_path}")
+
+    def _execute_adaptive(self):
+        """Execute analysis using the adaptive review agent."""
+        from ..adaptive import AdaptiveReviewAgent
+        from ..extractor import GitHistoryExtractor
+        from ..chunker import HistoryChunker
+        from ..summarizer import PhaseSummarizer
+        from ..storyteller import StoryTeller
+        from ..writer import OutputWriter
+
+        repo = self.get_option('repo', '.')
+        output = self.get_option('output')
+
+        # Handle remote repository
+        self._repo_handler = RemoteRepoHandler(repo)
+
+        try:
+            if self._repo_handler.is_local:
+                self._setup_local_repo(output)
+            else:
+                self._setup_remote_repo(output)
+
+            # Get options
+            branch = self.get_option('branch', 'HEAD')
+            max_commits = self.get_option('max_commits')
+            backend = self.get_option('backend')
+            model = self.get_option('model')
+            api_key = self.get_option('api_key')
+            ollama_url = self.get_option('ollama_url', 'http://localhost:11434')
+            skip_llm = self.get_option('skip_llm', False)
+            critical = self.get_option('critical', False)
+            directives = self.get_option('directives')
+            github_token = self.get_option('github_token')
+
+            # Load goals if provided
+            user_goals = []
+            if self._todo_content:
+                # Parse goals from todo content (one per line, skip empty/comments)
+                for line in self._todo_content.split('\n'):
+                    line = line.strip()
+                    if line and not line.startswith('#') and not line.startswith('-'):
+                        user_goals.append(line)
+                    elif line.startswith('- '):
+                        user_goals.append(line[2:])
+
+            # Create components
+            extractor = GitHistoryExtractor(str(self._repo_path))
+            chunker = HistoryChunker('adaptive')
+
+            summarizer = None
+            storyteller = None
+            if not skip_llm:
+                summarizer = PhaseSummarizer(
+                    backend=backend,
+                    model=model,
+                    api_key=api_key,
+                    ollama_url=ollama_url,
+                    todo_content=self._todo_content,
+                    critical_mode=critical,
+                    directives=directives
+                )
+                storyteller = StoryTeller(
+                    backend=backend,
+                    model=model,
+                    api_key=api_key,
+                    ollama_url=ollama_url,
+                    todo_content=self._todo_content,
+                    critical_mode=critical,
+                    directives=directives
+                )
+
+            # Create adaptive agent
+            agent = AdaptiveReviewAgent(
+                extractor=extractor,
+                chunker=chunker,
+                summarizer=summarizer,
+                storyteller=storyteller,
+                logger=lambda msg: self.print_info(msg)
+            )
+
+            # Run adaptive analysis
+            self.print_info(f"Repository: {self._repo_path}")
+            self.print_info(f"Output: {self._output_path}")
+            if user_goals:
+                self.print_info(f"Goals: {len(user_goals)} objectives loaded\n")
+
+            result = agent.analyze(
+                repo_path=str(self._repo_path),
+                output_path=str(self._output_path),
+                branch=branch,
+                user_goals=user_goals,
+                directives=directives,
+                critical_mode=critical,
+                max_commits=max_commits,
+                skip_llm=skip_llm,
+                github_token=github_token,
+            )
+
+            # Write output files
+            if result.narrative and not skip_llm:
+                self.console.print("\n[bold]Writing output files...[/bold]")
+                markdown_path = self._output_path / "history_story.md"
+                OutputWriter.write_markdown(
+                    result.narrative, result.phases, str(markdown_path), self._repo_name
+                )
+                self.print_success(f"Wrote {markdown_path}")
+
+                json_path = self._output_path / "history_data.json"
+                OutputWriter.write_json(
+                    result.narrative, result.phases, str(json_path),
+                    repo_path=str(self._repo_path)
+                )
+                self.print_success(f"Wrote {json_path}")
+
+            # Report summary
+            self.print_success("\nAdaptive analysis complete!")
+            self.console.print(f"  Phases analyzed: {len(result.phases)}")
+            self.console.print(f"  Discoveries: {len(result.discoveries)}")
+            self.console.print(f"  Decisions made: {result.total_decisions}")
+            self.console.print(f"  Iterations: {result.total_iterations}")
+
+            # Show key findings
+            if result.key_findings:
+                self.console.print("\n[bold]Key Findings:[/bold]")
+                for finding in result.key_findings[:5]:
+                    self.console.print(f"  - {finding}")
+
+            # Show risks
+            if result.risk_summary:
+                self.console.print("\n[bold yellow]Risks Identified:[/bold yellow]")
+                for risk in result.risk_summary[:3]:
+                    self.console.print(f"  [yellow]! {risk[:80]}...[/yellow]" if len(risk) > 80 else f"  [yellow]! {risk}[/yellow]")
+
+            self.console.print(f"\nOutput written to: {self._output_path.resolve()}\n")
+
+        except Exception as e:
+            self.print_error(f"\nError: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        finally:
+            self._cleanup()
 
     def _list_branches(self, branch_manager: BranchManager):
         """List all available branches."""
