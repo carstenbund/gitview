@@ -74,6 +74,14 @@ This command runs the full pipeline:
   7. Write markdown reports and JSON data
 
 \b
+ADAPTIVE MODE (--adaptive):
+  Enables discovery-driven analysis that reacts to findings:
+  - Automatically adjusts analysis depth based on significance
+  - Detects security concerns, anomalies, and patterns
+  - Prioritizes goal-relevant discoveries when --todo provided
+  - Generates a discoveries.json with actionable insights
+
+\b
 REPOSITORY SOURCES:
   Local repository:     gitview analyze --repo /path/to/repo
   GitHub shortcut:      gitview analyze --repo org/repo
@@ -92,6 +100,7 @@ EXAMPLES:
   gitview analyze --skip-llm                # Quick analysis without LLM
   gitview analyze --hierarchical            # Detailed hierarchical mode
   gitview analyze --critical --todo GOALS.md  # Critical examination mode
+  gitview analyze --adaptive --todo GOALS.md  # Adaptive agent mode
 """
 
 
@@ -152,6 +161,8 @@ EXAMPLES:
 @click.option('--github-token',
               envvar='GITHUB_TOKEN',
               help="GitHub token for PR/review context enrichment")
+@click.option('--adaptive', is_flag=True,
+              help="Enable adaptive agent mode: discovery-driven analysis that reacts to findings")
 def analyze(**kwargs):
     """Analyze git repository and generate narrative history."""
     cmd = AnalyzeCommand(**kwargs)
