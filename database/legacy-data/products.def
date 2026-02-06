@@ -1,0 +1,28 @@
+# products.def - Product catalog table definition
+# Stores product information for inventory management
+
+TABLE products
+{
+    # Primary key
+    FIELD product_id    INT64    PRIMARY_KEY
+
+    # Product information
+    FIELD sku           STRING   SIZE=50
+    FIELD name          STRING   SIZE=200
+    FIELD description   STRING   SIZE=1000 NULLABLE
+    FIELD category      STRING   SIZE=50
+
+    # Pricing
+    FIELD price         DOUBLE
+    FIELD cost          DOUBLE   NULLABLE
+    FIELD currency      STRING   SIZE=3    DEFAULT=USD
+
+    # Inventory
+    FIELD quantity      INT32    DEFAULT=0
+    FIELD reorder_level INT32    DEFAULT=10
+    FIELD is_available  BOOL     DEFAULT=true
+
+    # Metadata
+    FIELD created_at    INT64
+    FIELD updated_at    INT64    NULLABLE
+}

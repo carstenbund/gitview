@@ -1,0 +1,32 @@
+# orders.def - Order transaction table definition
+# Stores customer order information
+
+TABLE orders
+{
+    # Primary key
+    FIELD order_id      INT64    PRIMARY_KEY
+
+    # Foreign keys
+    FIELD user_id       INT64
+    FIELD product_id    INT64
+
+    # Order details
+    FIELD quantity      INT32
+    FIELD unit_price    DOUBLE
+    FIELD total_price   DOUBLE
+    FIELD tax_amount    DOUBLE   DEFAULT=0.0
+
+    # Status
+    FIELD status        STRING   SIZE=20   DEFAULT=pending
+    # Status values: pending, processing, shipped, delivered, cancelled
+
+    # Shipping
+    FIELD shipping_address STRING SIZE=500 NULLABLE
+    FIELD tracking_number  STRING SIZE=100 NULLABLE
+
+    # Timestamps
+    FIELD order_date    INT64
+    FIELD ship_date     INT64    NULLABLE
+    FIELD delivery_date INT64    NULLABLE
+    FIELD updated_at    INT64    NULLABLE
+}

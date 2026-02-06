@@ -1,0 +1,25 @@
+# users.def - User account table definition
+# Stores user account information
+
+TABLE users
+{
+    # Primary key
+    FIELD id            INT64    PRIMARY_KEY
+
+    # User profile
+    FIELD username      STRING   SIZE=50
+    FIELD email         STRING   SIZE=255
+    FIELD full_name     STRING   SIZE=100  NULLABLE
+
+    # Account status
+    FIELD is_active     BOOL     DEFAULT=true
+    FIELD is_admin      BOOL     DEFAULT=false
+
+    # Financial
+    FIELD balance       DOUBLE   DEFAULT=0.0
+
+    # Timestamps (Unix timestamps)
+    FIELD created_at    INT64
+    FIELD updated_at    INT64    NULLABLE
+    FIELD last_login    INT64    NULLABLE
+}
