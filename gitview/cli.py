@@ -17,6 +17,7 @@ from .commands import (
     InjectHistoryCommand,
     RemoveHistoryCommand,
     CompareBranchesCommand,
+    WorklogCommand,
 )
 from .commands.storyline import (
     ListStorylineCommand,
@@ -166,6 +167,63 @@ EXAMPLES:
 def analyze(**kwargs):
     """Analyze git repository and generate narrative history."""
     cmd = AnalyzeCommand(**kwargs)
+    cmd.run()
+
+
+WORKLOG_HELP = """Generate a work log from GitHub commit history across all branches.
+
+\b
+Fetches every commit visible on any branch within the given date range,
+deduplicates by SHA (so a commit merged to multiple branches is only counted
+once), resolves the best associated PR for each commit, and renders the
+result as Markdown (default) or CSV — suitable for billing reports.
+
+\b
+REQUIREMENTS:
+  A GitHub token with at least 'repo' read scope is required.
+  Set GITHUB_TOKEN or pass --github-token.
+
+\b
+DATE FORMATS:
+  Both YYYY-MM-DD and full ISO-8601 timestamps are accepted.
+  --since defaults to 00:00:00 UTC; --until defaults to 23:59:59 UTC.
+
+\b
+EXAMPLES:
+  gitview worklog --owner myorg --repo myrepo \\
+      --since 2024-01-01 --until 2024-01-31
+
+  gitview worklog --owner myorg --repo myrepo \\
+      --since 2024-01-01 --until 2024-01-31 \\
+      --author octocat --format csv --output jan_worklog.csv
+
+  # Write to stdout (e.g. for piping)
+  gitview worklog --owner myorg --repo myrepo \\
+      --since 2024-01-01 --until 2024-01-31 | less
+"""
+
+
+@cli.command(help=WORKLOG_HELP)
+@click.option('--owner', required=True,
+              help="GitHub organisation or user that owns the repository")
+@click.option('--repo', required=True,
+              help="Repository name (without owner prefix)")
+@click.option('--since', required=True,
+              help="Start date: YYYY-MM-DD or ISO-8601 timestamp")
+@click.option('--until', required=True,
+              help="End date: YYYY-MM-DD or ISO-8601 timestamp (inclusive)")
+@click.option('--author',
+              help="Filter commits by GitHub login (optional)")
+@click.option('--format', 'fmt', type=click.Choice(['markdown', 'csv']),
+              default='markdown',
+              help="Output format: markdown (default) or csv")
+@click.option('--output', '-o', default=None,
+              help="Output file path (default: auto-named in current directory)")
+@click.option('--github-token', envvar='GITHUB_TOKEN',
+              help="GitHub token (defaults to GITHUB_TOKEN env var)")
+def worklog(**kwargs):
+    """Generate a work log from GitHub commit history across all branches."""
+    cmd = WorklogCommand(**kwargs)
     cmd.run()
 
 

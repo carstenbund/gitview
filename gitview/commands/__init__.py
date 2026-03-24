@@ -13,6 +13,7 @@ from .file_history import FileHistoryCommand
 from .inject_history import InjectHistoryCommand
 from .remove_history import RemoveHistoryCommand
 from .compare_branches import CompareBranchesCommand
+from .worklog import WorklogCommand
 
 __all__ = [
     'BaseCommand',
@@ -24,4 +25,5 @@ __all__ = [
     'InjectHistoryCommand',
     'RemoveHistoryCommand',
     'CompareBranchesCommand',
+    'WorklogCommand',
 ]
