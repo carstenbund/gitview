@@ -2,12 +2,17 @@
 
 import csv
 import io
+import os
+import subprocess
 import sys
+from dataclasses import dataclass
 from typing import Optional
 
 import click
 
 from .base import BaseCommand
+from ..cache import CacheManager
+from ..extractor import CommitRecord
 from ..github_graphql import (
     GitHubGraphQLClient,
     GitHubGraphQLError,
@@ -17,21 +22,84 @@ from ..github_graphql import (
 )
 from ..remote import RemoteRepoHandler
 
-# Branch prefixes that are tool-generated and not useful as "work branch" labels
+# Tool-generated branch prefixes to ignore when resolving "work branch"
 _TOOL_BRANCH_PREFIXES = ("claude/", "dependabot/", "renovate/", "snyk-")
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Minimal PR summary for cache-sourced commits (mirrors PullRequest fields)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _PRSummary:
+    number: int
+    title: str
+    state: str
+    merged: bool
+    merged_at: Optional[str]
+    head_ref_name: Optional[str]
+    base_ref_name: Optional[str]
+
+
+# ---------------------------------------------------------------------------
+# Token auto-discovery
+# ---------------------------------------------------------------------------
+
+def _resolve_token(explicit: Optional[str] = None) -> Optional[str]:
+    """Discover a GitHub token without requiring the user to supply it.
+
+    Search order:
+      1. Explicitly passed value (CLI flag)
+      2. GITHUB_TOKEN environment variable
+      3. GH_TOKEN environment variable (GitHub CLI convention)
+      4. `gh auth token` (GitHub CLI, if installed and authenticated)
+      5. git credential helper for github.com
+    """
+    if explicit:
+        return explicit
+
+    for var in ("GITHUB_TOKEN", "GH_TOKEN"):
+        val = os.environ.get(var)
+        if val:
+            return val
+
+    # Try GitHub CLI
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True, text=True, timeout=5
+        )
+        token = result.stdout.strip()
+        if token:
+            return token
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Try git credential helper for api.github.com
+    try:
+        result = subprocess.run(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("password="):
+                return line[9:]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Repo / owner resolution
 # ---------------------------------------------------------------------------
 
 def _resolve_owner_repo(repo_spec: str) -> tuple[str, str]:
     """Resolve owner and repo name from a repo spec.
 
-    Accepts:
-      - Local path (reads GitHub remote from git config)
-      - GitHub shortcut: org/repo
-      - Full URL: https://github.com/org/repo
+    Accepts a local path (reads GitHub remote from git config),
+    a GitHub shortcut org/repo, or a full URL.
     """
     handler = RemoteRepoHandler(repo_spec)
 
@@ -54,6 +122,19 @@ def _resolve_owner_repo(repo_spec: str) -> tuple[str, str]:
     return handler.repo_info.org, handler.repo_info.repo
 
 
+def _local_repo_path(repo_spec: str) -> Optional[str]:
+    """Return the local filesystem path for the repo spec, or None if remote."""
+    handler = RemoteRepoHandler(repo_spec)
+    if handler.is_local:
+        try:
+            import git
+            r = git.Repo(repo_spec, search_parent_directories=True)
+            return str(r.working_dir)
+        except Exception:
+            return repo_spec
+    return None
+
+
 def _to_iso(date_str: str, end_of_day: bool = False) -> str:
     """Normalise YYYY-MM-DD to a full ISO-8601 UTC timestamp."""
     if "T" in date_str:
@@ -61,8 +142,60 @@ def _to_iso(date_str: str, end_of_day: bool = False) -> str:
     return f"{date_str}T23:59:59Z" if end_of_day else f"{date_str}T00:00:00Z"
 
 
+# ---------------------------------------------------------------------------
+# Cached-commit helpers
+# ---------------------------------------------------------------------------
+
+def _pr_from_context(ctx: dict) -> Optional[_PRSummary]:
+    """Build a minimal PR summary from a CommitRecord's github_context dict."""
+    if not ctx or not ctx.get("pr_number"):
+        return None
+    return _PRSummary(
+        number=ctx["pr_number"],
+        title=ctx.get("pr_title") or "",
+        state=ctx.get("pr_state") or "",
+        merged=ctx.get("pr_merged", False),
+        merged_at=None,  # not stored in GitHubContext
+        head_ref_name=ctx.get("source_branch"),
+        base_ref_name=ctx.get("target_branch"),
+    )
+
+
+def _worklog_from_cache(
+    records: list[CommitRecord],
+    since: str,
+    until: str,
+    author_filter: Optional[str],
+) -> list[dict]:
+    """Build worklog entries from cached CommitRecords filtered by date range."""
+    commits = []
+    for r in records:
+        ts = r.timestamp
+        if ts < since or ts > until:
+            continue
+        if author_filter and author_filter.lower() not in (r.author or "").lower():
+            continue
+
+        ctx = r.github_context or {}
+        commits.append({
+            "sha": r.commit_hash,
+            "date": ts,
+            "author_name": r.author,
+            "author_login": None,
+            "message": r.commit_subject or r.commit_message.splitlines()[0],
+            "branches": set(),          # not tracked per-commit in local cache
+            "best_pr": _pr_from_context(ctx),
+            "default_branch": "main",   # used only for fallback branch label
+            "_source": "cache",
+        })
+    return sorted(commits, key=lambda c: c["date"])
+
+
+# ---------------------------------------------------------------------------
+# Live GitHub API helpers
+# ---------------------------------------------------------------------------
+
 def _list_all_branches(client: GitHubGraphQLClient, owner: str, repo: str) -> list[str]:
-    """Return all branch names for a GitHub repository via GraphQL."""
     query = """
     query($owner: String!, $repo: String!, $after: String) {
         repository(owner: $owner, name: $repo) {
@@ -73,97 +206,42 @@ def _list_all_branches(client: GitHubGraphQLClient, owner: str, repo: str) -> li
         }
     }
     """
-    branches = []
-    cursor = None
-    has_next = True
-
+    branches, cursor, has_next = [], None, True
     while has_next:
         data = client.execute(query, {"owner": owner, "repo": repo, "after": cursor})
         refs = data.get("repository", {}).get("refs", {})
-        page_info = refs.get("pageInfo", {})
         branches.extend(n["name"] for n in refs.get("nodes", []) if n)
-        has_next = page_info.get("hasNextPage", False)
-        cursor = page_info.get("endCursor")
-
+        has_next = refs.get("pageInfo", {}).get("hasNextPage", False)
+        cursor = refs.get("pageInfo", {}).get("endCursor")
     return branches
 
 
 def _choose_best_pr(prs: list[PullRequest], default_branch: str) -> Optional[PullRequest]:
-    """Prefer merged PRs targeting the default branch, then most-recently merged."""
     if not prs:
         return None
-
-    def sort_key(pr: PullRequest):
-        return (pr.merged, pr.base_ref_name == default_branch, pr.merged_at or "")
-
-    return sorted(prs, key=sort_key, reverse=True)[0]
-
-
-def _work_branch(commit: dict) -> str:
-    """Return the meaningful 'work branch' label for a commit.
-
-    Priority:
-      1. PR head branch — where the work was actually done
-      2. If the commit is on the default branch (no PR): it was committed
-         directly there — show the default branch, not an unrelated descendant
-      3. Non-tool branches from the set (commit is on a feature branch, no PR)
-    """
-    pr: Optional[PullRequest] = commit["best_pr"]
-    if pr and pr.head_ref_name:
-        return pr.head_ref_name
-
-    default = commit["default_branch"]
-    branches = commit["branches"]
-
-    # Commit is on the default branch — no PR means it was committed directly
-    # to it.  All other branches in the set are merely descendants: noise.
-    if default in branches:
-        return default
-
-    # Commit is not on the default branch at all (feature branch, no PR).
-    # Return the most meaningful branch name.
-    candidates = sorted(
-        b for b in branches
-        if not any(b.startswith(p) for p in _TOOL_BRANCH_PREFIXES)
-    )
-    return candidates[0] if candidates else sorted(branches)[0]
+    return sorted(
+        prs,
+        key=lambda pr: (pr.merged, pr.base_ref_name == default_branch, pr.merged_at or ""),
+        reverse=True,
+    )[0]
 
 
-def _merged_to(commit: dict) -> str:
-    """Return the target branch if the commit's PR was merged, else empty string."""
-    pr: Optional[PullRequest] = commit["best_pr"]
-    if pr and pr.merged and pr.base_ref_name:
-        return pr.base_ref_name
-    return ""
-
-
-# ---------------------------------------------------------------------------
-# Core worklog builder
-# ---------------------------------------------------------------------------
-
-def build_worklog(
+def _worklog_from_api(
     token: str,
     owner: str,
     repo: str,
     since: str,
     until: str,
-    author_login: Optional[str] = None,
-    progress_callback=None,
+    author_login: Optional[str],
+    progress_callback,
 ) -> list[dict]:
-    """Fetch and deduplicate commits across all branches for the given date range.
-
-    Uses GitHubGraphQLClient (with built-in 24 h caching).
-
-    Returns a list of commit dicts sorted by date.  Each dict contains:
-      sha, date, author_name, author_login, message,
-      branches (set), best_pr (PullRequest|None), default_branch (str)
-    """
-    client = GitHubGraphQLClient(token)
+    """Fetch deduplicated commits across all branches via GitHub GraphQL."""
 
     def _progress(msg: str):
         if progress_callback:
             progress_callback(msg)
 
+    client = GitHubGraphQLClient(token)
     repo_info = client.get_repository_info(owner, repo)
     default_branch = (repo_info.get("defaultBranchRef") or {}).get("name", "main")
 
@@ -171,26 +249,16 @@ def build_worklog(
     all_branches = _list_all_branches(client, owner, repo)
 
     commits_by_sha: dict[str, dict] = {}
-
     for branch_name in all_branches:
         _progress(f"Scanning {branch_name}…")
-        branch_commits = client.get_all_commits_with_prs(
-            owner=owner,
-            repo=repo,
-            branch=branch_name,
-            since=since,
-            until=until,
+        for cc in client.get_all_commits_with_prs(
+            owner=owner, repo=repo, branch=branch_name,
+            since=since, until=until,
             progress_callback=lambda n: _progress(f"  {branch_name}: {n} commits"),
-        )
-
-        for cc in branch_commits:
-            if author_login:
-                login = cc.author.login if cc.author else None
-                if login != author_login:
-                    continue
-
+        ):
+            if author_login and (not cc.author or cc.author.login != author_login):
+                continue
             if cc.sha not in commits_by_sha:
-                best_pr = _choose_best_pr(cc.associated_prs, default_branch)
                 commits_by_sha[cc.sha] = {
                     "sha": cc.sha,
                     "date": cc.committed_date or "",
@@ -198,8 +266,9 @@ def build_worklog(
                     "author_login": cc.author.login if cc.author else None,
                     "message": cc.message.splitlines()[0] if cc.message else "",
                     "branches": set(),
-                    "best_pr": best_pr,
+                    "best_pr": _choose_best_pr(cc.associated_prs, default_branch),
                     "default_branch": default_branch,
+                    "_source": "api",
                 }
             commits_by_sha[cc.sha]["branches"].add(branch_name)
 
@@ -207,22 +276,99 @@ def build_worklog(
 
 
 # ---------------------------------------------------------------------------
-# Renderers
+# Main entry point
 # ---------------------------------------------------------------------------
 
-def render_markdown(commits: list[dict], repo_label: str = "", since: str = "", until: str = "") -> str:
-    """Render a clean daily-table markdown work log."""
+def build_worklog(
+    token: Optional[str],
+    owner: str,
+    repo: str,
+    since: str,
+    until: str,
+    author_login: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    repo_path: Optional[str] = None,
+    progress_callback=None,
+) -> tuple[list[dict], str]:
+    """Return (commits, source) where source is 'cache' or 'api'."""
+
+    def _progress(msg: str):
+        if progress_callback:
+            progress_callback(msg)
+
+    # 1. Try the local analysis cache (repo_history.jsonl from a prior run)
+    cache_dir = output_dir or (os.path.join(repo_path, "output") if repo_path else "output")
+    cache = CacheManager(cache_dir, repo_path)
+    cached_records = cache.load_commit_history()
+    if cached_records:
+        _progress(f"Loading from cache ({len(cached_records)} commits)…")
+        commits = _worklog_from_cache(cached_records, since, until, author_login)
+        if commits:
+            return commits, "cache"
+        _progress("Cache hit but no commits in date range — querying GitHub API…")
+
+    # 2. Fall back to live GitHub API
+    if not token:
+        raise click.UsageError(
+            "No GitHub token found. Set GITHUB_TOKEN, run `gh auth login`, "
+            "or pass --github-token."
+        )
+    commits = _worklog_from_api(token, owner, repo, since, until, author_login, progress_callback)
+    return commits, "api"
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+def _work_branch(commit: dict) -> str:
+    """Return the meaningful 'work branch' label for a commit."""
+    pr = commit["best_pr"]
+    if pr and pr.head_ref_name:
+        return pr.head_ref_name
+
+    default = commit["default_branch"]
+    branches = commit["branches"]
+
+    # Commit is on the default branch with no PR — it was committed directly there.
+    if default in branches:
+        return default
+
+    # Feature branch commit with no PR — show the branch, skip tool branches.
+    candidates = sorted(
+        b for b in branches
+        if not any(b.startswith(p) for p in _TOOL_BRANCH_PREFIXES)
+    )
+    return candidates[0] if candidates else (sorted(branches)[0] if branches else default)
+
+
+def _merged_to(commit: dict) -> str:
+    pr = commit["best_pr"]
+    if pr and pr.merged and pr.base_ref_name:
+        return pr.base_ref_name
+    return ""
+
+
+def render_markdown(
+    commits: list[dict],
+    repo_label: str = "",
+    since: str = "",
+    until: str = "",
+    source: str = "",
+) -> str:
     lines = []
     header = f"# Work Log — {repo_label}" if repo_label else "# Work Log"
     if since and until:
         header += f"  |  {since[:10]} → {until[:10]}"
+    if source:
+        header += f"  *(source: {source})*"
     lines.append(header)
     lines.append("")
 
     current_day = None
     day_rows: list[tuple] = []
 
-    def _flush_day(day: str, rows: list[tuple]):
+    def _flush(day: str, rows: list[tuple]):
         lines.append(f"## {day}")
         lines.append("")
         lines.append("| SHA | Time | Author | Message | Branch | Merged to | PR |")
@@ -235,35 +381,31 @@ def render_markdown(commits: list[dict], repo_label: str = "", since: str = "", 
         day = c["date"][:10]
         time = c["date"][11:16] if len(c["date"]) >= 16 else ""
         author = c["author_login"] or c["author_name"]
-        branch = _work_branch(c)
-        merged = _merged_to(c) or "—"
-        pr: Optional[PullRequest] = c["best_pr"]
+        pr = c["best_pr"]
         pr_cell = f"#{pr.number}" if pr else "—"
 
         if day != current_day:
             if current_day is not None:
-                _flush_day(current_day, day_rows)
-            current_day = day
-            day_rows = []
+                _flush(current_day, day_rows)
+            current_day, day_rows = day, []
 
         day_rows.append((
             f"`{c['sha'][:7]}`",
             time,
             author,
             c["message"].replace("|", "\\|"),
-            branch,
-            merged,
+            _work_branch(c),
+            _merged_to(c) or "—",
             pr_cell,
         ))
 
     if current_day is not None:
-        _flush_day(current_day, day_rows)
+        _flush(current_day, day_rows)
 
     return "\n".join(lines)
 
 
 def render_csv(commits: list[dict]) -> str:
-    """Render a CSV work log suitable for billing/import."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
@@ -272,7 +414,7 @@ def render_csv(commits: list[dict]) -> str:
         "pr_number", "pr_title", "pr_merged_at",
     ])
     for c in commits:
-        pr: Optional[PullRequest] = c["best_pr"]
+        pr = c["best_pr"]
         writer.writerow([
             c["date"][:10],
             c["date"][11:19] if len(c["date"]) >= 19 else "",
@@ -296,23 +438,21 @@ class WorklogCommand(BaseCommand):
     """Generate a work log from GitHub commit history across all branches."""
 
     def validate(self) -> None:
-        if not self.get_option("github_token"):
-            raise click.UsageError(
-                "A GitHub token is required. Pass --github-token or set GITHUB_TOKEN."
-            )
         if not self.get_option("since"):
             raise click.UsageError("--since is required (start date, YYYY-MM-DD).")
         if not self.get_option("until"):
             raise click.UsageError("--until is required (end date, YYYY-MM-DD).")
 
     def execute(self):
-        token = self.get_option("github_token")
         repo_spec = self.get_option("repo", ".")
         since = _to_iso(self.get_option("since"))
         until = _to_iso(self.get_option("until"), end_of_day=True)
         author = self.get_option("author")
         fmt = self.get_option("fmt", "markdown")
-        output = self.get_option("output")
+        output_dir = self.get_option("output", "output")   # same convention as analyze
+
+        token = _resolve_token(self.get_option("github_token"))
+        repo_path = _local_repo_path(repo_spec)
 
         try:
             owner, repo_name = _resolve_owner_repo(repo_spec)
@@ -328,19 +468,21 @@ class WorklogCommand(BaseCommand):
             self.print_info(f"Filtering by author: {author}")
 
         with self.create_progress() as progress:
-            task = progress.add_task("Fetching commits…", total=None)
+            task = progress.add_task("Loading commits…", total=None)
 
             def update(msg: str):
                 progress.update(task, description=msg)
 
             try:
-                commits = build_worklog(
+                commits, source = build_worklog(
                     token=token,
                     owner=owner,
                     repo=repo_name,
                     since=since,
                     until=until,
                     author_login=author,
+                    output_dir=output_dir,
+                    repo_path=repo_path,
                     progress_callback=update,
                 )
             except GitHubRateLimitError as exc:
@@ -349,26 +491,33 @@ class WorklogCommand(BaseCommand):
             except GitHubGraphQLError as exc:
                 self.print_error(f"GitHub API error: {exc}")
                 sys.exit(1)
+            except click.UsageError as exc:
+                self.print_error(str(exc))
+                sys.exit(1)
 
-        self.print_success(f"Found {len(commits)} unique commit(s).")
+        self.print_success(
+            f"Found {len(commits)} unique commit(s)  [source: {source}]"
+        )
+
+        ext = "csv" if fmt == "csv" else "md"
+        filename = f"worklog_{owner}_{repo_name}_{since[:10]}_{until[:10]}.{ext}"
 
         if fmt == "csv":
             content = render_csv(commits)
-            default_filename = f"worklog_{owner}_{repo_name}_{since[:10]}_{until[:10]}.csv"
         else:
             content = render_markdown(
                 commits, repo_label=repo_label,
-                since=since, until=until,
+                since=since, until=until, source=source,
             )
-            default_filename = f"worklog_{owner}_{repo_name}_{since[:10]}_{until[:10]}.md"
 
-        if output:
-            dest = output
-        elif not sys.stdout.isatty():
+        if not sys.stdout.isatty():
             print(content)
             return
-        else:
-            dest = default_filename
+
+        from pathlib import Path
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        dest = out_path / filename
 
         with open(dest, "w", encoding="utf-8") as fh:
             fh.write(content)

@@ -170,39 +170,36 @@ def analyze(**kwargs):
     cmd.run()
 
 
-WORKLOG_HELP = """Generate a work log from GitHub commit history across all branches.
+WORKLOG_HELP = """Generate a work log from GitHub commit history for billing/reporting.
 
 \b
-Fetches every commit visible on any branch within the given date range,
-deduplicates by SHA (so a commit merged to multiple branches is counted once),
-resolves the best associated PR for each commit via GraphQL, and renders the
-result as Markdown (default) or CSV — suitable for billing/work reports.
+DATA SOURCES (tried in order):
+  1. Existing analysis cache in --output dir (output/repo_history.jsonl)
+     produced by 'gitview analyze' or 'gitview extract' — instant, no API calls.
+  2. Live GitHub GraphQL API — used when no cache is available.
+
+\b
+TOKEN DISCOVERY (no flag needed in most cases):
+  GITHUB_TOKEN or GH_TOKEN environment variable
+  gh auth token  (GitHub CLI, if installed and authenticated)
+  git credential helper for github.com
 
 \b
 REPOSITORY:
-  Uses the same --repo convention as 'gitview analyze':
-    Current directory (auto-detects GitHub remote):  --repo .
+  Same --repo convention as 'gitview analyze':
+    Current directory (auto-detects GitHub remote):  --repo .  (default)
     GitHub shortcut:                                  --repo org/repo
     Full URL:                                         --repo https://github.com/org/repo
 
 \b
-REQUIREMENTS:
-  A GitHub token with at least 'repo' read scope is required.
-  Set GITHUB_TOKEN or pass --github-token.
-
-\b
-DATE FORMATS:
-  Both YYYY-MM-DD and full ISO-8601 timestamps are accepted.
-  --since defaults to 00:00:00 UTC; --until defaults to 23:59:59 UTC.
-
-\b
 EXAMPLES:
-  gitview worklog --repo org/repo --since 2024-01-01 --until 2024-01-31
+  # Uses existing analyze output — no API call needed
+  gitview worklog --since 2024-01-01 --until 2024-01-31
 
-  gitview worklog --repo . --since 2024-01-01 --until 2024-01-31 \\
-      --author octocat --format csv -o jan.csv
+  gitview worklog --repo org/repo --since 2024-01-01 --until 2024-01-31 \\
+      --author octocat --format csv
 
-  gitview worklog --repo org/repo --since 2024-01-01 --until 2024-01-31 | less
+  gitview worklog --since 2024-01-01 --until 2024-01-31 | less
 """
 
 
@@ -218,10 +215,10 @@ EXAMPLES:
 @click.option('--format', 'fmt', type=click.Choice(['markdown', 'csv']),
               default='markdown',
               help="Output format: markdown (default) or csv")
-@click.option('--output', '-o', default=None,
-              help="Output file path (default: auto-named in current directory)")
+@click.option('--output', '-o', default='output',
+              help="Output directory — same as analyze/extract (default: output)")
 @click.option('--github-token', envvar='GITHUB_TOKEN',
-              help="GitHub token (defaults to GITHUB_TOKEN env var)")
+              help="GitHub token — auto-discovered from gh CLI or git credentials if not set")
 def worklog(**kwargs):
     """Generate a work log from GitHub commit history across all branches."""
     cmd = WorklogCommand(**kwargs)
