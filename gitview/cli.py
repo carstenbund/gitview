@@ -174,9 +174,16 @@ WORKLOG_HELP = """Generate a work log from GitHub commit history across all bran
 
 \b
 Fetches every commit visible on any branch within the given date range,
-deduplicates by SHA (so a commit merged to multiple branches is only counted
-once), resolves the best associated PR for each commit, and renders the
-result as Markdown (default) or CSV — suitable for billing reports.
+deduplicates by SHA (so a commit merged to multiple branches is counted once),
+resolves the best associated PR for each commit via GraphQL, and renders the
+result as Markdown (default) or CSV — suitable for billing/work reports.
+
+\b
+REPOSITORY:
+  Uses the same --repo convention as 'gitview analyze':
+    Current directory (auto-detects GitHub remote):  --repo .
+    GitHub shortcut:                                  --repo org/repo
+    Full URL:                                         --repo https://github.com/org/repo
 
 \b
 REQUIREMENTS:
@@ -190,24 +197,18 @@ DATE FORMATS:
 
 \b
 EXAMPLES:
-  gitview worklog --owner myorg --repo myrepo \\
-      --since 2024-01-01 --until 2024-01-31
+  gitview worklog --repo org/repo --since 2024-01-01 --until 2024-01-31
 
-  gitview worklog --owner myorg --repo myrepo \\
-      --since 2024-01-01 --until 2024-01-31 \\
-      --author octocat --format csv --output jan_worklog.csv
+  gitview worklog --repo . --since 2024-01-01 --until 2024-01-31 \\
+      --author octocat --format csv -o jan.csv
 
-  # Write to stdout (e.g. for piping)
-  gitview worklog --owner myorg --repo myrepo \\
-      --since 2024-01-01 --until 2024-01-31 | less
+  gitview worklog --repo org/repo --since 2024-01-01 --until 2024-01-31 | less
 """
 
 
 @cli.command(help=WORKLOG_HELP)
-@click.option('--owner', required=True,
-              help="GitHub organisation or user that owns the repository")
-@click.option('--repo', required=True,
-              help="Repository name (without owner prefix)")
+@click.option('--repo', '-r', default='.',
+              help="Repository: local path, GitHub shortcut (org/repo), or full URL")
 @click.option('--since', required=True,
               help="Start date: YYYY-MM-DD or ISO-8601 timestamp")
 @click.option('--until', required=True,
