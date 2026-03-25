@@ -13,10 +13,12 @@ from ..github_graphql import (
     GitHubGraphQLError,
     GitHubRateLimitError,
     PullRequest,
-    CommitContext,
     parse_github_url,
 )
 from ..remote import RemoteRepoHandler
+
+# Branch prefixes that are tool-generated and not useful as "work branch" labels
+_TOOL_BRANCH_PREFIXES = ("claude/", "dependabot/", "renovate/", "snyk-")
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +36,6 @@ def _resolve_owner_repo(repo_spec: str) -> tuple[str, str]:
     handler = RemoteRepoHandler(repo_spec)
 
     if handler.is_local:
-        # Try to read the GitHub remote URL from local git config
         try:
             import git
             local_repo = git.Repo(repo_spec, search_parent_directories=True)
@@ -77,13 +78,10 @@ def _list_all_branches(client: GitHubGraphQLClient, owner: str, repo: str) -> li
     has_next = True
 
     while has_next:
-        variables = {"owner": owner, "repo": repo, "after": cursor}
-        data = client.execute(query, variables)
+        data = client.execute(query, {"owner": owner, "repo": repo, "after": cursor})
         refs = data.get("repository", {}).get("refs", {})
         page_info = refs.get("pageInfo", {})
-        nodes = refs.get("nodes", [])
-
-        branches.extend(n["name"] for n in nodes if n)
+        branches.extend(n["name"] for n in refs.get("nodes", []) if n)
         has_next = page_info.get("hasNextPage", False)
         cursor = page_info.get("endCursor")
 
@@ -101,6 +99,44 @@ def _choose_best_pr(prs: list[PullRequest], default_branch: str) -> Optional[Pul
     return sorted(prs, key=sort_key, reverse=True)[0]
 
 
+def _work_branch(commit: dict) -> str:
+    """Return the meaningful 'work branch' label for a commit.
+
+    Priority:
+      1. PR head branch — where the work was actually done
+      2. If the commit is on the default branch (no PR): it was committed
+         directly there — show the default branch, not an unrelated descendant
+      3. Non-tool branches from the set (commit is on a feature branch, no PR)
+    """
+    pr: Optional[PullRequest] = commit["best_pr"]
+    if pr and pr.head_ref_name:
+        return pr.head_ref_name
+
+    default = commit["default_branch"]
+    branches = commit["branches"]
+
+    # Commit is on the default branch — no PR means it was committed directly
+    # to it.  All other branches in the set are merely descendants: noise.
+    if default in branches:
+        return default
+
+    # Commit is not on the default branch at all (feature branch, no PR).
+    # Return the most meaningful branch name.
+    candidates = sorted(
+        b for b in branches
+        if not any(b.startswith(p) for p in _TOOL_BRANCH_PREFIXES)
+    )
+    return candidates[0] if candidates else sorted(branches)[0]
+
+
+def _merged_to(commit: dict) -> str:
+    """Return the target branch if the commit's PR was merged, else empty string."""
+    pr: Optional[PullRequest] = commit["best_pr"]
+    if pr and pr.merged and pr.base_ref_name:
+        return pr.base_ref_name
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Core worklog builder
 # ---------------------------------------------------------------------------
@@ -116,11 +152,11 @@ def build_worklog(
 ) -> list[dict]:
     """Fetch and deduplicate commits across all branches for the given date range.
 
-    Uses the existing GitHubGraphQLClient (with its built-in caching) so that
-    repeated calls within 24 h are served from the cache.
+    Uses GitHubGraphQLClient (with built-in 24 h caching).
 
-    Returns a list of dicts (sorted by date) each containing the CommitContext
-    plus resolved branch list and best PR.
+    Returns a list of commit dicts sorted by date.  Each dict contains:
+      sha, date, author_name, author_login, message,
+      branches (set), best_pr (PullRequest|None), default_branch (str)
     """
     client = GitHubGraphQLClient(token)
 
@@ -128,29 +164,26 @@ def build_worklog(
         if progress_callback:
             progress_callback(msg)
 
-    # Determine default branch for PR preference logic
     repo_info = client.get_repository_info(owner, repo)
     default_branch = (repo_info.get("defaultBranchRef") or {}).get("name", "main")
 
     _progress("Fetching branch list…")
-    branches = _list_all_branches(client, owner, repo)
+    all_branches = _list_all_branches(client, owner, repo)
 
-    # Deduplicate commits by SHA; track which branches each appears on
     commits_by_sha: dict[str, dict] = {}
 
-    for branch_name in branches:
-        _progress(f"Scanning branch: {branch_name}")
+    for branch_name in all_branches:
+        _progress(f"Scanning {branch_name}…")
         branch_commits = client.get_all_commits_with_prs(
             owner=owner,
             repo=repo,
             branch=branch_name,
             since=since,
             until=until,
-            progress_callback=lambda n: _progress(f"  {branch_name}: {n} commits fetched"),
+            progress_callback=lambda n: _progress(f"  {branch_name}: {n} commits"),
         )
 
         for cc in branch_commits:
-            # Optional author filter (match on login)
             if author_login:
                 login = cc.author.login if cc.author else None
                 if login != author_login:
@@ -166,6 +199,7 @@ def build_worklog(
                     "message": cc.message.splitlines()[0] if cc.message else "",
                     "branches": set(),
                     "best_pr": best_pr,
+                    "default_branch": default_branch,
                 }
             commits_by_sha[cc.sha]["branches"].add(branch_name)
 
@@ -176,61 +210,80 @@ def build_worklog(
 # Renderers
 # ---------------------------------------------------------------------------
 
-def render_markdown(commits: list[dict], repo_label: str = "") -> str:
+def render_markdown(commits: list[dict], repo_label: str = "", since: str = "", until: str = "") -> str:
+    """Render a clean daily-table markdown work log."""
     lines = []
-    if repo_label:
-        lines.append(f"# Work Log — {repo_label}\n")
+    header = f"# Work Log — {repo_label}" if repo_label else "# Work Log"
+    if since and until:
+        header += f"  |  {since[:10]} → {until[:10]}"
+    lines.append(header)
+    lines.append("")
 
     current_day = None
+    day_rows: list[tuple] = []
+
+    def _flush_day(day: str, rows: list[tuple]):
+        lines.append(f"## {day}")
+        lines.append("")
+        lines.append("| SHA | Time | Author | Message | Branch | Merged to | PR |")
+        lines.append("|-----|------|--------|---------|--------|-----------|----|")
+        for row in rows:
+            lines.append("| {} | {} | {} | {} | {} | {} | {} |".format(*row))
+        lines.append("")
+
     for c in commits:
         day = c["date"][:10]
-        if day != current_day:
-            if lines:
-                lines.append("")
-            lines.append(f"## {day}")
-            current_day = day
-
+        time = c["date"][11:16] if len(c["date"]) >= 16 else ""
         author = c["author_login"] or c["author_name"]
-        branches = ", ".join(sorted(c["branches"]))
-
-        lines.append(f"- **{c['message']}**")
-        lines.append(f"  - author: `{author}`")
-        lines.append(f"  - sha: `{c['sha'][:7]}`")
-        lines.append(f"  - branches: {branches}")
-
+        branch = _work_branch(c)
+        merged = _merged_to(c) or "—"
         pr: Optional[PullRequest] = c["best_pr"]
-        if pr:
-            pr_url = f"https://github.com/{repo_label}/pull/{pr.number}" if repo_label else ""
-            merged = pr.merged_at or "not merged"
-            lines.append(f"  - pr: #{pr.number} {pr.title}" + (f" — {pr_url}" if pr_url else ""))
-            lines.append(f"  - pr state: {pr.state}")
-            lines.append(f"  - base ← head: `{pr.base_ref_name}` ← `{pr.head_ref_name}`")
-            lines.append(f"  - merged at: {merged}")
+        pr_cell = f"#{pr.number}" if pr else "—"
+
+        if day != current_day:
+            if current_day is not None:
+                _flush_day(current_day, day_rows)
+            current_day = day
+            day_rows = []
+
+        day_rows.append((
+            f"`{c['sha'][:7]}`",
+            time,
+            author,
+            c["message"].replace("|", "\\|"),
+            branch,
+            merged,
+            pr_cell,
+        ))
+
+    if current_day is not None:
+        _flush_day(current_day, day_rows)
 
     return "\n".join(lines)
 
 
 def render_csv(commits: list[dict]) -> str:
+    """Render a CSV work log suitable for billing/import."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "date", "sha", "author", "message", "branches",
-        "pr_number", "pr_title", "pr_state", "pr_merged_at",
-        "base_branch", "head_branch",
+        "date", "time", "sha", "author",
+        "message", "work_branch", "merged_to",
+        "pr_number", "pr_title", "pr_merged_at",
     ])
     for c in commits:
-        branches = "|".join(sorted(c["branches"]))
         pr: Optional[PullRequest] = c["best_pr"]
         writer.writerow([
-            c["date"], c["sha"][:7],
+            c["date"][:10],
+            c["date"][11:19] if len(c["date"]) >= 19 else "",
+            c["sha"][:7],
             c["author_login"] or c["author_name"],
-            c["message"], branches,
+            c["message"],
+            _work_branch(c),
+            _merged_to(c),
             pr.number if pr else "",
             pr.title if pr else "",
-            pr.state if pr else "",
             pr.merged_at if pr else "",
-            pr.base_ref_name if pr else "",
-            pr.head_ref_name if pr else "",
         ])
     return buf.getvalue()
 
@@ -297,13 +350,16 @@ class WorklogCommand(BaseCommand):
                 self.print_error(f"GitHub API error: {exc}")
                 sys.exit(1)
 
-        self.print_success(f"Found {len(commits)} unique commit(s) across all branches.")
+        self.print_success(f"Found {len(commits)} unique commit(s).")
 
         if fmt == "csv":
             content = render_csv(commits)
             default_filename = f"worklog_{owner}_{repo_name}_{since[:10]}_{until[:10]}.csv"
         else:
-            content = render_markdown(commits, repo_label=repo_label)
+            content = render_markdown(
+                commits, repo_label=repo_label,
+                since=since, until=until,
+            )
             default_filename = f"worklog_{owner}_{repo_name}_{since[:10]}_{until[:10]}.md"
 
         if output:
