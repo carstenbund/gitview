@@ -14,6 +14,7 @@ from .inject_history import InjectHistoryCommand
 from .remove_history import RemoveHistoryCommand
 from .compare_branches import CompareBranchesCommand
 from .worklog import WorklogCommand
+from .brief import BriefCommand
 
 __all__ = [
     'BaseCommand',
@@ -26,4 +27,5 @@ __all__ = [
     'RemoveHistoryCommand',
     'CompareBranchesCommand',
     'WorklogCommand',
+    'BriefCommand',
 ]
