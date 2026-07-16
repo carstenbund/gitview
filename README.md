@@ -23,6 +23,7 @@ Example run on this repository:
 - **LLM-Powered Summaries**: Uses Claude to generate narrative summaries for each phase
 - **Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
 - **Storyline Tracking**: Track narrative threads (features, refactoring efforts, bug campaigns) across phases with automatic detection and lifecycle management
+- **Agent Brief**: Compile a compact, no-LLM project history digest (`gitview brief`) meant to be committed and read once per session — a token-efficient substitute for an AI coding agent re-deriving project history from scratch
 - **Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
 - **Critical Examination Mode**: Objective assessment focused on gaps, technical debt, and alignment with project goals (perfect for project leads)
 
@@ -190,6 +191,33 @@ Chunk an extracted JSONL file into phases:
 ```bash
 gitview chunk history.jsonl --output ./phases --strategy adaptive
 ```
+
+### Agent Brief (No LLM)
+
+Compile a compact, agent-oriented history digest — commit stats, a phase
+timeline, and detected storylines — into a single markdown file. Unlike
+`analyze`, this never calls an LLM: it's meant to be generated once (and
+regenerated cheaply after a batch of new commits) and then just read, so an
+AI coding agent doesn't have to re-derive project history from `git log`
+and file exploration at the start of every session.
+
+```bash
+# Write ./AGENT_BRIEF.md (skips automatically if HEAD hasn't moved)
+gitview brief
+
+# Always regenerate, even if already up to date
+gitview brief --force
+
+# Check freshness only (exit 1 if stale); doesn't write anything
+gitview brief --check
+
+# Custom output path
+gitview brief -o docs/BRIEF.md
+```
+
+Commit the result so future sessions (yours or an agent's) can read it
+instead of re-analyzing the repository. `--repo` accepts a local path only
+(unlike `analyze`/`worklog`, which also accept GitHub shortcuts/URLs).
 
 ## File History Tracking & Header Injection
 

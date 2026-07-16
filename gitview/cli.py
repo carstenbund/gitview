@@ -18,6 +18,7 @@ from .commands import (
     RemoveHistoryCommand,
     CompareBranchesCommand,
     WorklogCommand,
+    BriefCommand,
 )
 from .commands.storyline import (
     ListStorylineCommand,
@@ -225,6 +226,49 @@ EXAMPLES:
 def worklog(**kwargs):
     """Generate a work log from GitHub commit history across all branches."""
     cmd = WorklogCommand(**kwargs)
+    cmd.run()
+
+
+BRIEF_HELP = """Generate a compact, agent-oriented project history digest (no LLM).
+
+\b
+Compiles commit stats, a phase timeline, and multi-signal storylines (PR
+labels/titles, file clusters, commit patterns, and this project's own
+'Storyline: [status:category] Title' commit trailer) into ONE markdown
+file — meant to be committed and read once per session instead of an
+agent re-deriving project history from git log / exploration each time.
+
+\b
+Fully deterministic: no LLM backend, no API key, no network calls.
+Skips regeneration automatically if HEAD hasn't moved since the last run.
+
+\b
+EXAMPLES:
+  gitview brief                      # Write ./AGENT_BRIEF.md (skips if fresh)
+  gitview brief --force              # Always regenerate
+  gitview brief --check              # Report freshness only; exit 1 if stale
+  gitview brief -o docs/BRIEF.md     # Custom output path
+"""
+
+
+@cli.command(help=BRIEF_HELP)
+@click.option('--repo', '-r', default=".",
+              help="Path to a local git repository (default: current directory)")
+@click.option('--output', '-o', default=None,
+              help="Output markdown file path (default: AGENT_BRIEF.md at repo root)")
+@click.option('--branch', default='HEAD',
+              help="Branch to analyze (default: HEAD)")
+@click.option('--max-commits', type=int,
+              help="Maximum commits to analyze (default: all)")
+@click.option('--top-files', type=int, default=15,
+              help="Number of most-changed files to list (default: 15)")
+@click.option('--force', is_flag=True,
+              help="Regenerate even if already up to date with HEAD")
+@click.option('--check', is_flag=True,
+              help="Report freshness only (exit 1 if stale); don't write")
+def brief(**kwargs):
+    """Generate a compact, agent-oriented project history digest."""
+    cmd = BriefCommand(**kwargs)
     cmd.run()
 
 

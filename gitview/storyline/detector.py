@@ -59,6 +59,77 @@ class BaseDetector(ABC):
         )
 
 
+class CommitTrailerDetector(BaseDetector):
+    """Detect storylines from the GitView commit trailer convention.
+
+    Recognizes the ``Storyline: [status:category] Title`` trailer documented
+    in this project's own CLAUDE.md/AGENTS.md. Since this is an explicit,
+    author-authored annotation rather than an inferred pattern, it carries
+    the highest confidence weight of any detector and is trusted even when
+    the category doesn't map to a known StorylineCategory (unlike the other
+    detectors, which drop unmatched categories) — the title/status are still
+    precise, deliberate signal worth keeping.
+    """
+
+    TRAILER_PATTERN = re.compile(
+        r'^Storyline:\s*\[\s*([a-zA-Z_]+)\s*:\s*([a-zA-Z_]+)\s*\]\s*(.+?)\s*$',
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    def __init__(self, weight: float = 0.95):
+        """Initialize with the highest confidence weight (explicit, intentional signal)."""
+        super().__init__(weight=weight)
+
+    def detect(self, phase) -> List[StorylineSignal]:
+        """Detect signals from 'Storyline: [status:category] Title' trailers."""
+        signals = []
+        groups: Dict[str, Dict[str, Any]] = {}
+
+        for commit in phase.commits:
+            message = commit.commit_message or ""
+            match = self.TRAILER_PATTERN.search(message)
+            if not match:
+                continue
+
+            status_raw, category_raw, title = match.groups()
+            status = status_raw.strip().lower()
+            title = title.strip()
+            if not title:
+                continue
+
+            key = Storyline.normalize_title(title)
+            if key not in groups:
+                groups[key] = {
+                    'title': title,
+                    'category': StorylineCategory.from_string(category_raw.strip()),
+                    'commits': [],
+                    'status': status,
+                }
+
+            groups[key]['commits'].append(commit.short_hash)
+            groups[key]['status'] = status  # Latest commit wins
+
+        for group in groups.values():
+            status = group['status']
+            signal = self._create_signal(
+                title=group['title'],
+                category=group['category'],
+                description=f"Tagged '{status}' via commit trailer",
+                phase_number=phase.phase_number,
+                commit_hashes=group['commits'],
+                confidence_modifier=1.0,
+                data={
+                    'status': status,
+                    'is_new': status == 'new',
+                    'is_completion': status == 'completed',
+                    'source': 'commit_trailer',
+                },
+            )
+            signals.append(signal)
+
+        return signals
+
+
 class PRLabelDetector(BaseDetector):
     """Detect storylines from GitHub PR labels - highest confidence source."""
 
@@ -674,6 +745,7 @@ class StorylineDetector:
         pr_title_weight: float = 0.8,
         file_cluster_weight: float = 0.7,
         commit_message_weight: float = 0.6,
+        commit_trailer_weight: float = 0.95,
     ):
         """
         Initialize with configurable detector weights.
@@ -683,8 +755,10 @@ class StorylineDetector:
             pr_title_weight: Confidence weight for PR title pattern signals
             file_cluster_weight: Confidence weight for file cluster signals
             commit_message_weight: Confidence weight for commit message signals
+            commit_trailer_weight: Confidence weight for 'Storyline: [status:category]' trailers
         """
         self.detectors = [
+            CommitTrailerDetector(weight=commit_trailer_weight),
             PRLabelDetector(weight=pr_label_weight),
             PRTitlePatternDetector(weight=pr_title_weight),
             FileClusterDetector(weight=file_cluster_weight),

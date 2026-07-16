@@ -11,6 +11,7 @@ from .models import (
 from .state_machine import StorylineStateMachine
 from .detector import (
     StorylineDetector,
+    CommitTrailerDetector,
     PRLabelDetector,
     PRTitlePatternDetector,
     CommitMessagePatternDetector,
@@ -33,6 +34,7 @@ __all__ = [
     'StorylineStateMachine',
     # Detectors
     'StorylineDetector',
+    'CommitTrailerDetector',
     'PRLabelDetector',
     'PRTitlePatternDetector',
     'CommitMessagePatternDetector',
