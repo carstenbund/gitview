@@ -339,6 +339,71 @@ class BriefCommand(BaseCommand):
     def validate(self) -> None:
         pass  # No required options; repo-path validity is checked in execute()
 
+    def _extract_records(self, extractor, repo, repo_path, branch, max_commits, head_sha):
+        """Extract commit records, reusing a cached extraction when possible.
+
+        `brief` is designed to be regenerated repeatedly ("after a batch of new
+        commits"), so re-extracting the entire history each time is wasteful —
+        and on very large repositories, extracting from scratch is exactly what
+        exhausts memory. We persist extracted records to a per-repo JSONL cache
+        and, on a subsequent run whose HEAD descends from the cached HEAD, only
+        extract the new commits and append them.
+
+        Every failure path falls back to a full extraction, so a missing,
+        stale, or unreadable cache is never fatal — worst case is the original
+        behaviour (now itself far lighter on memory).
+        """
+        # A bounded run (--max-commits) is a partial view; don't cache it or
+        # serve one from cache.
+        if max_commits:
+            return extractor.extract_history(max_commits=max_commits, branch=branch)
+
+        cache_path = repo_path / ".gitview" / "brief_history.jsonl"
+
+        cached = None
+        if cache_path.exists():
+            try:
+                cached = extractor.load_from_jsonl(str(cache_path))
+            except Exception:
+                cached = None
+
+        records = None
+        if cached:
+            cached_head = cached[-1].commit_hash
+            if cached_head == head_sha:
+                records = cached
+            else:
+                try:
+                    descends = repo.is_ancestor(cached_head, head_sha)
+                except Exception:
+                    descends = False
+                if descends:
+                    new_records = extractor.extract_incremental(
+                        since_commit=cached_head, branch=branch
+                    )
+                    # extract_incremental leaves loc_total at 0 for the range;
+                    # continue the cumulative count from where the cache left off.
+                    extractor._calculate_cumulative_loc(
+                        new_records, starting_loc=cached[-1].loc_total
+                    )
+                    records = cached + new_records
+
+        if records is None:
+            records = extractor.extract_history(branch=branch)
+
+        # Refresh the cache (best-effort; never fail the command over it).
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            # Keep the cache dir out of the user's git status.
+            gitignore = cache_path.parent / ".gitignore"
+            if not gitignore.exists():
+                gitignore.write_text("*\n", encoding="utf-8")
+            extractor.save_to_jsonl(records, str(cache_path))
+        except Exception:
+            pass
+
+        return records
+
     def execute(self):
         repo_spec = self.get_option("repo", ".")
         output = self.get_option("output") or "AGENT_BRIEF.md"
@@ -406,7 +471,9 @@ class BriefCommand(BaseCommand):
         with self.create_progress() as progress:
             task = progress.add_task("Extracting git history...", total=None)
             extractor = GitHistoryExtractor(str(repo_path))
-            records = extractor.extract_history(max_commits=max_commits, branch=branch)
+            records = self._extract_records(
+                extractor, repo, repo_path, branch, max_commits, head_sha
+            )
             progress.update(task, completed=True)
 
         if not records:
