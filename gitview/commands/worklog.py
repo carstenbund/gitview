@@ -1,5 +1,7 @@
 """Worklog command — GitHub-based work log for billing and reporting."""
 
+from __future__ import annotations
+
 import csv
 import io
 import sys
