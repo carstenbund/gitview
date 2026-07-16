@@ -272,6 +272,50 @@ class TestBriefHelpers:
         assert identity["name"] == "my-project"
         assert identity["description"] == ""
 
+    def test_detect_repo_identity_prefers_remote_slug(self, tmp_path):
+        # HTTPS and SSH remotes both resolve to the repo slug.
+        identity = _detect_repo_identity(
+            tmp_path, remote_url="https://github.com/org/ado-api.git"
+        )
+        assert identity["name"] == "ado-api"
+
+        identity = _detect_repo_identity(
+            tmp_path, remote_url="git@github.com:org/ado-api.git"
+        )
+        assert identity["name"] == "ado-api"
+
+    def test_detect_repo_identity_remote_overrides_subcomponent_pyproject(self, tmp_path):
+        # A monorepo root pyproject that names a packaged subcomponent must not
+        # override the repo's own identity (from the remote).
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "ocs-pipeline"\n'
+            'description = "OCS XML order processing pipeline"\n'
+        )
+
+        identity = _detect_repo_identity(
+            tmp_path, remote_url="https://github.com/org/ado-api.git"
+        )
+
+        assert identity["name"] == "ado-api"
+        # The subcomponent's description is not trusted for the whole repo.
+        assert identity["description"] != "OCS XML order processing pipeline"
+
+    def test_detect_repo_identity_trusts_pyproject_when_name_matches_repo(self, tmp_path):
+        # When the pyproject name matches the repo (single-package repo), keep
+        # using its description.
+        repo_dir = tmp_path / "widget"
+        repo_dir.mkdir()
+        (repo_dir / "pyproject.toml").write_text(
+            '[project]\nname = "widget"\ndescription = "Makes widgets"\n'
+        )
+
+        identity = _detect_repo_identity(
+            repo_dir, remote_url="https://github.com/org/widget.git"
+        )
+
+        assert identity["name"] == "widget"
+        assert identity["description"] == "Makes widgets"
+
     def test_read_stamp_missing_file_returns_none(self, tmp_path):
         assert _read_stamp(tmp_path / "nope.md") is None
 

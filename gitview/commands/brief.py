@@ -69,27 +69,117 @@ def _first_paragraph(readme_path: Path, max_len: int = 400) -> str:
     return ""
 
 
-def _detect_repo_identity(repo_path: Path) -> Dict[str, str]:
-    """Best-effort project name/description from common manifest files."""
-    name = repo_path.resolve().name
+def _repo_name_from_remote(remote_url: Optional[str]) -> Optional[str]:
+    """Extract the repository slug from a git remote URL.
+
+    Handles both HTTPS (``https://host/org/repo.git``) and SSH
+    (``git@host:org/repo.git``) forms. Returns None if nothing usable.
+    """
+    if not remote_url:
+        return None
+    slug = remote_url.rstrip("/").rsplit("/", 1)[-1]
+    if ":" in slug and "/" not in slug:
+        # SSH form with no path component after the colon (git@host:repo.git)
+        slug = slug.rsplit(":", 1)[-1]
+    if slug.endswith(".git"):
+        slug = slug[:-4]
+    return slug or None
+
+
+def _parse_pyproject_identity(text: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (name, description) from a pyproject's ``[project]`` table
+    (PEP 621), falling back to ``[tool.poetry]``.
+
+    Scoped to those tables specifically — the previous approach grepped for the
+    first ``name = "..."`` anywhere in the file, which in a monorepo could pick
+    up an unrelated table's key. Uses a real TOML parser when one is available
+    (tomllib on 3.11+, tomli if installed) and a section-scoped regex otherwise,
+    so it still works on Python 3.8.
+    """
+    data = None
+    try:
+        import tomllib  # Python 3.11+
+        data = tomllib.loads(text)
+    except Exception:
+        try:
+            import tomli  # optional backport
+            data = tomli.loads(text)
+        except Exception:
+            data = None
+
+    if data is not None:
+        project = data.get("project") or {}
+        name = project.get("name")
+        description = project.get("description")
+        if not (name or description):
+            poetry = (data.get("tool") or {}).get("poetry") or {}
+            name = name or poetry.get("name")
+            description = description or poetry.get("description")
+        return name, description
+
+    # Fallback for environments without a TOML parser: read only within the
+    # relevant table, bounded by the next table header.
+    def _in_table(table: str) -> Tuple[Optional[str], Optional[str]]:
+        block_match = re.search(
+            r'(?ms)^\[' + re.escape(table) + r'\]\s*(.*?)(?=^\[|\Z)', text
+        )
+        if not block_match:
+            return None, None
+        block = block_match.group(1)
+        nm = re.search(r'''(?m)^\s*name\s*=\s*["']([^"']+)["']''', block)
+        dm = re.search(r'''(?m)^\s*description\s*=\s*["']([^"']+)["']''', block)
+        return (nm.group(1) if nm else None, dm.group(1) if dm else None)
+
+    name, description = _in_table("project")
+    if not (name or description):
+        p_name, p_desc = _in_table("tool.poetry")
+        name = name or p_name
+        description = description or p_desc
+    return name, description
+
+
+def _detect_repo_identity(repo_path: Path, remote_url: Optional[str] = None) -> Dict[str, str]:
+    """Best-effort project name/description from common manifest files.
+
+    The git remote's repo slug is treated as the most authoritative name for
+    the *whole* repository: a monorepo's root ``pyproject.toml`` may declare
+    only a single packaged component (e.g. ``ocs-pipeline``), which should not
+    masquerade as the repo's identity. When the pyproject name disagrees with
+    the repo's own identity (remote slug / directory name), its metadata is
+    treated as a subcomponent's and ignored for naming and description.
+    """
+    dir_name = repo_path.resolve().name
+    remote_name = _repo_name_from_remote(remote_url)
+    name = dir_name
     description = ""
 
+    py_name = py_desc = None
     pyproject = repo_path / "pyproject.toml"
     if pyproject.exists():
         text = pyproject.read_text(encoding="utf-8", errors="ignore")
-        name_match = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', text)
-        desc_match = re.search(r'(?m)^\s*description\s*=\s*"([^"]+)"', text)
-        if name_match:
-            name = name_match.group(1)
-        if desc_match:
-            description = desc_match.group(1)
+        py_name, py_desc = _parse_pyproject_identity(text)
+
+    # If we have a remote and the pyproject names a different package than the
+    # repo itself, treat that pyproject as describing a packaged subcomponent.
+    repo_identifiers = {n.lower() for n in (remote_name, dir_name) if n}
+    trust_pyproject = not (
+        remote_name and py_name and py_name.lower() not in repo_identifiers
+    )
+
+    if trust_pyproject and py_name:
+        name = py_name
+    if trust_pyproject and py_desc:
+        description = py_desc
+    if remote_name:
+        name = remote_name  # most authoritative whole-repo identity
 
     if not description:
         package_json = repo_path / "package.json"
         if package_json.exists():
             try:
                 data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
-                name = data.get("name", name)
+                if not remote_name and data.get("name"):
+                    name = data["name"]
                 description = data.get("description", description)
             except (json.JSONDecodeError, OSError):
                 pass
@@ -197,7 +287,7 @@ def render_brief(
     top_files_limit: int = 15,
 ) -> str:
     """Render the full agent-brief markdown document."""
-    identity = _detect_repo_identity(repo_path)
+    identity = _detect_repo_identity(repo_path, remote_url=remote_url)
     analyzer = SignificanceAnalyzer()
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
