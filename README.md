@@ -219,6 +219,51 @@ Commit the result so future sessions (yours or an agent's) can read it
 instead of re-analyzing the repository. `--repo` accepts a local path only
 (unlike `analyze`/`worklog`, which also accept GitHub shortcuts/URLs).
 
+### Work Log (GitHub, No LLM)
+
+Generate a chronological work log from GitHub commit history across **all**
+branches — useful for billing, timesheets, and status reports. `worklog`
+queries GitHub's GraphQL API, deduplicates commits by SHA (a commit merged to
+multiple branches is counted once), resolves the best associated Pull Request
+for each commit, and renders the result as Markdown (default) or CSV. Like
+`brief`, it never calls an LLM.
+
+```bash
+# Markdown work log for a date range (writes an auto-named file)
+gitview worklog --repo org/repo --since 2024-01-01 --until 2024-01-31
+
+# Current directory (auto-detects the GitHub remote)
+gitview worklog --repo . --since 2024-01-01 --until 2024-01-31
+
+# Filter by a GitHub login and export CSV to a specific file
+gitview worklog --repo . --since 2024-01-01 --until 2024-01-31 \
+    --author octocat --format csv -o jan.csv
+
+# Pipe to stdout (auto-detected when output is not a terminal)
+gitview worklog --repo org/repo --since 2024-01-01 --until 2024-01-31 | less
+```
+
+**Options:**
+
+```
+  -r, --repo TEXT        Repository: local path, GitHub shortcut (org/repo), or full URL (default: .)
+  --since TEXT           Start date: YYYY-MM-DD or ISO-8601 timestamp (required)
+  --until TEXT           End date: YYYY-MM-DD or ISO-8601 timestamp, inclusive (required)
+  --author TEXT          Filter commits by GitHub login (optional)
+  --format [markdown|csv]  Output format (default: markdown)
+  -o, --output PATH      Output file path (default: auto-named in current directory)
+  --github-token TEXT    GitHub token (defaults to GITHUB_TOKEN env var)
+```
+
+**Notes:**
+- A GitHub token with at least `repo` read scope is required — pass
+  `--github-token` or set `GITHUB_TOKEN`.
+- Dates accept both `YYYY-MM-DD` and full ISO-8601 timestamps. `--since`
+  defaults to `00:00:00` UTC and `--until` to `23:59:59` UTC.
+- When output is redirected (not a terminal), the log is printed to stdout so
+  it can be piped; otherwise it is written to an auto-named file such as
+  `worklog_org_repo_2024-01-01_2024-01-31.md`.
+
 ## File History Tracking & Header Injection
 
 GitView provides powerful file-level change tracking with AI-powered summaries and the ability to inject change histories directly into source files as header comments. This is ideal for deep code analysis, debugging, accountability, and understanding individual file evolution.

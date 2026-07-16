@@ -11,6 +11,23 @@ import git
 from git import Repo
 
 
+# File extensions treated as binary assets and excluded from line-change stats.
+# (Replaces the old per-diff mime_type check, which required materializing full
+# patch text just to identify and skip images.)
+_BINARY_EXTENSIONS = {
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.ico', '.webp', '.tiff', '.tif',
+    '.pdf', '.zip', '.gz', '.tar', '.tgz', '.bz2', '.7z', '.jar', '.class',
+    '.woff', '.woff2', '.ttf', '.eot', '.otf',
+    '.mp4', '.mov', '.avi', '.mp3', '.wav', '.ogg', '.webm',
+    '.so', '.dll', '.dylib', '.a', '.o', '.bin', '.exe', '.wasm',
+}
+
+# Bounds for comment scanning, to keep memory flat on commits that touch many
+# and/or very large files.
+_COMMENT_MAX_FILE_BYTES = 1_000_000  # skip individual files larger than ~1 MB
+_COMMENT_MAX_FILES = 40              # scan at most this many changed code files
+
+
 @dataclass
 class CommitRecord:
     """Represents a single commit with extracted metadata."""
@@ -281,8 +298,9 @@ class GitHistoryExtractor:
         # README analysis
         readme_info = self._get_readme_info(commit)
 
-        # Comment analysis
-        comment_info = self._get_comment_info(commit)
+        # Comment analysis (reuses the already-computed changed-file list so we
+        # don't diff the commit a second time)
+        comment_info = self._get_comment_info(commit, stats['files'].keys())
 
         # Detect large changes
         is_large_deletion = stats['deletions'] > 1000
@@ -318,7 +336,15 @@ class GitHistoryExtractor:
         )
 
     def _get_diff_stats(self, commit: git.Commit) -> Dict[str, Any]:
-        """Get diff statistics for a commit."""
+        """Get diff statistics for a commit.
+
+        Uses git's ``--numstat`` output (via ``commit.stats``) rather than
+        generating full patch text. This keeps peak memory flat: a commit that
+        adds a huge file or a vendored tree yields one line of numstat instead
+        of a multi-megabyte patch string held in memory. Line counts match the
+        previous patch-parsing approach (added/removed lines, headers excluded);
+        binary files report 0/0 in numstat and are skipped here by extension.
+        """
         stats = {
             'insertions': 0,
             'deletions': 0,
@@ -326,44 +352,28 @@ class GitHistoryExtractor:
             'files': {}
         }
 
-        if not commit.parents:
-            # Initial commit
+        try:
+            file_stats = commit.stats.files
+        except Exception:
+            return stats
+
+        for file_path, per_file in file_stats.items():
             try:
-                diff_index = commit.diff(git.NULL_TREE, create_patch=True)
-            except:
-                return stats
-        else:
-            diff_index = commit.parents[0].diff(commit, create_patch=True)
-
-        for diff in diff_index:
-            try:
-                # Skip binary files
-                if diff.a_blob and diff.a_blob.mime_type.startswith('image/'):
-                    continue
-                if diff.b_blob and diff.b_blob.mime_type.startswith('image/'):
+                ext = Path(file_path).suffix.lower()
+                if ext in _BINARY_EXTENSIONS:
                     continue
 
-                file_path = diff.b_path or diff.a_path
-                if not file_path:
-                    continue
+                insertions = int(per_file.get('insertions', 0) or 0)
+                deletions = int(per_file.get('deletions', 0) or 0)
 
-                # Get line changes
-                if diff.diff:
-                    diff_text = diff.diff.decode('utf-8', errors='ignore')
-                    # Exclude diff headers (---, +++) from line counts
-                    insertions = len([l for l in diff_text.split('\n') if l.startswith('+') and not l.startswith('+++')])
-                    deletions = len([l for l in diff_text.split('\n') if l.startswith('-') and not l.startswith('---')])
-
-                    stats['insertions'] += insertions
-                    stats['deletions'] += deletions
-                    stats['files'][file_path] = {
-                        'insertions': insertions,
-                        'deletions': deletions
-                    }
-
+                stats['insertions'] += insertions
+                stats['deletions'] += deletions
+                stats['files'][file_path] = {
+                    'insertions': insertions,
+                    'deletions': deletions,
+                }
                 stats['files_changed'] += 1
-
-            except Exception as e:
+            except Exception:
                 continue
 
         return stats
@@ -412,8 +422,17 @@ class GitHistoryExtractor:
 
         return info
 
-    def _get_comment_info(self, commit: git.Commit) -> Dict[str, Any]:
-        """Extract comment samples and density from code files."""
+    def _get_comment_info(self, commit: git.Commit, changed_files) -> Dict[str, Any]:
+        """Extract comment samples and density from changed code files.
+
+        Reads the post-commit content of each changed code file straight from
+        the commit tree, instead of re-diffing the commit with full patch text.
+        Bounded by ``_COMMENT_MAX_FILES`` and ``_COMMENT_MAX_FILE_BYTES`` so a
+        commit touching many or very large files can't blow up memory.
+
+        ``changed_files`` is the iterable of paths already computed by
+        ``_get_diff_stats`` (its ``files`` keys), avoiding a second diff.
+        """
         info = {
             'samples': [],
             'density': 0.0
@@ -421,46 +440,41 @@ class GitHistoryExtractor:
 
         total_lines = 0
         comment_lines = 0
+        scanned = 0
 
-        try:
-            if not commit.parents:
-                diff_index = commit.diff(git.NULL_TREE, create_patch=True)
-            else:
-                diff_index = commit.parents[0].diff(commit, create_patch=True)
+        for file_path in changed_files:
+            if scanned >= _COMMENT_MAX_FILES:
+                break
+            if not file_path:
+                continue
 
-            for diff in diff_index:
-                if not diff.b_blob:
+            ext = Path(file_path).suffix.lower()
+            language = self.language_extensions.get(ext)
+            if language not in self.comment_patterns:
+                continue
+
+            try:
+                # Resolve the blob at this commit (b-side). Deleted files raise
+                # KeyError and are skipped, matching the old b_blob-only logic.
+                blob = commit.tree / file_path
+                if getattr(blob, 'size', 0) > _COMMENT_MAX_FILE_BYTES:
                     continue
+                content = blob.data_stream.read().decode('utf-8', errors='ignore')
+            except Exception:
+                continue
 
-                file_path = diff.b_path
-                if not file_path:
-                    continue
+            scanned += 1
+            lines = content.split('\n')
+            total_lines += len(lines)
 
-                ext = Path(file_path).suffix.lower()
-                language = self.language_extensions.get(ext)
-
-                if language not in self.comment_patterns:
-                    continue
-
-                try:
-                    content = diff.b_blob.data_stream.read().decode('utf-8', errors='ignore')
-                    lines = content.split('\n')
-                    total_lines += len(lines)
-
-                    # Find comments
-                    for pattern in self.comment_patterns[language]:
-                        for match in re.finditer(pattern, content, re.MULTILINE):
-                            comment_text = match.group(0).strip()
-                            if len(comment_text) > 10:  # Skip very short comments
-                                comment_lines += len(comment_text.split('\n'))
-                                if len(info['samples']) < 5:
-                                    info['samples'].append(comment_text[:100])
-
-                except:
-                    continue
-
-        except:
-            pass
+            # Find comments
+            for pattern in self.comment_patterns[language]:
+                for match in re.finditer(pattern, content, re.MULTILINE):
+                    comment_text = match.group(0).strip()
+                    if len(comment_text) > 10:  # Skip very short comments
+                        comment_lines += len(comment_text.split('\n'))
+                        if len(info['samples']) < 5:
+                            info['samples'].append(comment_text[:100])
 
         # Calculate density
         if total_lines > 0:
