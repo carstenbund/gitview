@@ -1,6 +1,6 @@
 # Graph Analysis — Milestone 1 Coding Plan
 
-Status: **in progress** (this document is the concrete plan for the first
+Status: **implemented on the graph substrate branch** (this document is the concrete plan for the first
 implementation branch; the design rationale lives in the graph-analysis
 proposal that motivated it).
 
@@ -394,6 +394,45 @@ GitHub GraphQL integration class which needs network access).
 - `README.md`: `gitview graph` in the feature list and command examples
 
 ---
+
+## After milestone 1: two things before communities
+
+### 1. Permanent interpretation cache (small, high leverage)
+
+The existing `LLMResponseCache` keys on the raw prompt text and expires
+after 24 hours, so it rarely saves a call across runs. Once evidence is
+deterministic, an interpretation cache keyed by
+
+```
+(evidence packet hash, model, prompt template version)
+```
+
+with **no expiry** is almost free architecturally and directly attacks the
+round-trip problem: an unchanged community, hotspot or transition costs zero
+LLM calls on every subsequent run, and a rebuilt graph that produces the
+same packet bytes hits the same cache entry. This should land as the first
+PR after the projection, before any summarizer change, so the benchmark in
+the proposal (calls / tokens per 100 commits) can be measured with and
+without it.
+
+### 2. Evaluation gate on real repositories
+
+Before implementing community detection, run `gitview graph --stats` on
+several real repositories (this one, plus a few larger open-source projects
+of different shapes) and inspect whether:
+
+- the strongest co-change edges correspond to recognizable architectural
+  pairs (module + its tests, model + serializer, command + CLI wiring)
+- the most-connected files are the ones a maintainer would name as the
+  integration points
+- merge exclusion and the projection cap remove noise rather than signal
+- the incremental update produces the same edges as a full rebuild on a
+  repository with real merges and rebases
+
+If the raw coupling graph already reads as architecture, community
+detection is justified by evidence. If it does not, the projection weights
+(recency, change-size, mechanical-commit detection) need work first and
+communities would only cluster noise.
 
 ## Explicitly out of scope (milestone 2+)
 

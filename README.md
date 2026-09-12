@@ -24,6 +24,7 @@ Example run on this repository:
 - **Global Story Generation**: Combines phase summaries into executive summaries, timelines, technical retrospectives, and deletion stories
 - **Storyline Tracking**: Track narrative threads (features, refactoring efforts, bug campaigns) across phases with automatic detection and lifecycle management
 - **Agent Brief**: Compile a compact, no-LLM project history digest (`gitview brief`) meant to be committed and read once per session — a token-efficient substitute for an AI coding agent re-deriving project history from scratch
+- **Repository Graph**: Build a persistent, incremental SQLite graph of commits, files, authors, PRs and file co-change coupling (`gitview graph`) — deterministic structure that later stages interpret instead of rediscovering
 - **Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
 - **Critical Examination Mode**: Objective assessment focused on gaps, technical debt, and alignment with project goals (perfect for project leads)
 
@@ -213,6 +214,12 @@ gitview brief --check
 
 # Custom output path
 gitview brief -o docs/BRIEF.md
+
+# Build/update the persistent repository graph (no LLM)
+gitview graph                     # Build or update .gitview/graph.sqlite, print counts
+gitview graph --stats             # Also list most changed / most coupled / most connected files
+gitview graph --rebuild           # Drop and rebuild from scratch
+gitview graph --json              # Machine-readable output
 ```
 
 Commit the result so future sessions (yours or an agent's) can read it
