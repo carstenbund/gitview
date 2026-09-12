@@ -126,3 +126,21 @@ class TestSignificanceAnalyzerWithGitHubContext:
         ]
         clusters = SignificanceAnalyzer().cluster_commits(commits)
         assert [len(c.commits) for c in clusters] == [2, 1]
+
+
+class TestAdaptiveDiscoveryUsesRealRecords:
+    """Regression: the adaptive extractor iterated CommitRecord.files_changed (an int)."""
+
+    def test_hot_spot_detected_from_files_stats(self):
+        from gitview.adaptive.discovery_extractor import DiscoveryExtractor
+        from gitview.adaptive.models import DiscoveryType
+
+        commits = [
+            _make_commit(commit_hash=f"{i:012x}", commit_message=f"Tweak {i}",
+                         files={"core/engine.py": {"insertions": 1, "deletions": 0}})
+            for i in range(6)
+        ]
+        discoveries = DiscoveryExtractor().extract_from_phase(_make_phase(1, commits))
+        patterns = [d for d in discoveries if d.discovery_type == DiscoveryType.PATTERN]
+        assert patterns, "expected a hot-spot pattern discovery"
+        assert "core/engine.py" in patterns[0].file_paths
