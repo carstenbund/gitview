@@ -17,6 +17,27 @@ from .models import (
 )
 
 
+def _changed_files(commit: Any) -> List[str]:
+    """Changed-file paths for a commit-like object.
+
+    ``CommitRecord.files_changed`` is an *integer count*; the canonical path
+    list is ``CommitRecord.get_changed_files()`` (backed by ``files_stats``).
+    Test doubles without either yield an empty list.
+    """
+    getter = getattr(commit, "get_changed_files", None)
+    if callable(getter):
+        try:
+            files = getter()
+        except Exception:
+            files = None
+        if isinstance(files, (list, tuple, set, frozenset)):
+            return list(files)
+    stats = getattr(commit, "files_stats", None)
+    if isinstance(stats, dict):
+        return list(stats.keys())
+    return []
+
+
 class DiscoveryExtractor:
     """Extracts discoveries from phases, summaries, and patterns.
 
@@ -370,9 +391,8 @@ class DiscoveryExtractor:
         # Collect all files changed in this phase
         files_changed: Dict[str, int] = {}
         for commit in phase.commits:
-            if hasattr(commit, "files_changed"):
-                for file in commit.files_changed:
-                    files_changed[file] = files_changed.get(file, 0) + 1
+            for file in _changed_files(commit):
+                files_changed[file] = files_changed.get(file, 0) + 1
 
         if not files_changed:
             return discoveries

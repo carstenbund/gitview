@@ -26,6 +26,10 @@ won't be touched by that command — update them yourself when they go stale.
   summaries), `--adaptive` (discovery-driven agent mode), `--skip-llm`.
 - `brief` — deterministic, no-LLM agent digest (this file's companion,
   `AGENT_BRIEF.md`). See `gitview/commands/brief.py`.
+- `graph` — deterministic, no-LLM persistent repository graph in
+  `<repo>/.gitview/graph.sqlite` (commits, files, authors, PRs, commit→file
+  edges, file co-change projection). Incremental; rebuilds on history
+  rewrite. See `gitview/commands/graph.py` and `gitview/graph/`.
 - `extract` / `chunk` — standalone, no-LLM steps of the analyze pipeline.
 - `track-files` / `file-history` / `inject-history` / `remove-history` —
   per-file change history, optionally AI-summarized and cached, injectable
@@ -48,6 +52,23 @@ won't be touched by that command — update them yourself when they go stale.
 - `cache.py` — `CacheManager`: commit-SHA-keyed freshness checks for
   `output/`. **Gap:** built but not actually wired into `analyze.py`, which
   still reimplements similar logic ad hoc (see Proposal Docs Status below).
+- `history_cache.py` — per-repo incremental extraction cache
+  (`<repo>/.gitview/history.jsonl`) shared by `brief` and `graph`, plus the
+  single `head_descends_from()` history-rewrite check both rely on.
+
+**Repository graph** (`graph/`, no LLM):
+- `models.py` — `GraphMetadata`, `GraphStats`, top-list row types, schema and
+  projection version constants.
+- `store.py` — `GraphStore`: explicit SQLite tables (`commits`,
+  `commit_parents`, `files`, `commit_files`, `authors`, `pull_requests`,
+  `commit_prs`) plus the derived `file_edges`; only additive counts are
+  stored, Jaccard is derived on read.
+- `projections/file_cochange.py` — set-based file↔file co-change upsert.
+  Merge commits and commits over `max_projection_files` are excluded.
+- `builder.py` / `updater.py` — `GraphBuilder` (build/update) and
+  `GraphUpdater.sync()` (decides rebuild / update / unchanged).
+- `analysis/stats.py` — counts and most changed / coupled / connected lists.
+  Milestone plan: `docs/GRAPH_MILESTONE_1_PLAN.md`.
 
 **LLM narrative generation** (requires `--backend`/API key or Ollama):
 - `backends/{anthropic,openai,ollama}_backend.py` + `router.py` — pluggable
@@ -103,6 +124,7 @@ writing:
 | `FILE_HISTORY_PROPOSAL.md` | Implemented — `track-files`/`file-history`/`inject-history`/`compare-branches` |
 | `docs/STORYLINE_IMPLEMENTATION_PLAN.md`, `docs/HIERARCHICAL_STRATEGY.md` | Implemented — `storyline/` package, `hierarchical_summarizer.py`/`hierarchical_storyteller.py` |
 | `OPTIMIZATION_PROPOSAL.md` | Partially implemented — `CacheManager` (`cache.py`) was built but is not wired into `analyze.py`; `history_data.json` still embeds full phase objects rather than references |
+| `docs/GRAPH_MILESTONE_1_PLAN.md` | Implemented — `graph/` package and `gitview graph`; communities/hotspots/evidence packets are later milestones |
 | `JSON_TRACKER_PROPOSAL.md` / `docs/json_tracker_architecture.md` | Not implemented — proposes tracking JSON *config file* diffs specifically; no `json_tracker.py` exists |
 
 ---

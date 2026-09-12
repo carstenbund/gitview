@@ -84,9 +84,33 @@ class CommitRecord:
         filtered_data = {k: v for k, v in data.items() if k in known_fields}
         return cls(**filtered_data)
 
+    def get_changed_files(self) -> List[str]:
+        """Paths touched by this commit, in extraction (git numstat) order.
+
+        This is the canonical way to read the changed-file list; ``files_stats``
+        is the per-file statistics that back it.
+        """
+        return list(self.files_stats.keys())
+
+    @property
+    def is_merge(self) -> bool:
+        """True when the commit has more than one parent."""
+        return len(self.parent_hashes) > 1
+
     def has_github_context(self) -> bool:
         """Check if this commit has GitHub context data."""
         return self.github_context is not None and bool(self.github_context.get('pr_number'))
+
+    def get_pr_number(self) -> Optional[int]:
+        """Get the PR number if available."""
+        if self.github_context:
+            number = self.github_context.get('pr_number')
+            if number is not None:
+                try:
+                    return int(number)
+                except (TypeError, ValueError):
+                    return None
+        return None
 
     def get_pr_title(self) -> Optional[str]:
         """Get PR title if available."""

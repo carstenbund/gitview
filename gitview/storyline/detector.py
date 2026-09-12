@@ -9,6 +9,21 @@ from datetime import datetime
 from .models import StorylineSignal, StorylineCategory, Storyline
 
 
+def _changed_files(commit) -> List[str]:
+    """Changed-file list for a commit-like object.
+
+    Prefers the canonical ``CommitRecord.get_changed_files()``; falls back to a
+    ``files_stats`` mapping so lightweight test doubles keep working.
+    """
+    getter = getattr(commit, 'get_changed_files', None)
+    if callable(getter):
+        return list(getter())
+    stats = getattr(commit, 'files_stats', None)
+    if isinstance(stats, dict):
+        return list(stats.keys())
+    return []
+
+
 class BaseDetector(ABC):
     """Base class for storyline signal detectors."""
 
@@ -227,9 +242,7 @@ class PRLabelDetector(BaseDetector):
             pr_groups[pr_title]['commits'].append(commit.short_hash)
             pr_groups[pr_title]['labels'].update(labels)
 
-            # Track files
-            if hasattr(commit, 'files') and commit.files:
-                pr_groups[pr_title]['files'].update(commit.files)
+            pr_groups[pr_title]['files'].update(_changed_files(commit))
 
         # Create signals from grouped PRs
         for pr_title, group in pr_groups.items():
@@ -371,6 +384,7 @@ class PRTitlePatternDetector(BaseDetector):
                 }
 
             pr_groups[pr_title]['commits'].append(commit.short_hash)
+            pr_groups[pr_title]['files'].update(_changed_files(commit))
 
         # Create signals
         for pr_title, group in pr_groups.items():
@@ -482,6 +496,7 @@ class CommitMessagePatternDetector(BaseDetector):
             theme_groups[theme_key]['commits'].append(commit.short_hash)
             theme_groups[theme_key]['messages'].append(message)
             theme_groups[theme_key]['keywords'].update(keywords_found)
+            theme_groups[theme_key]['files'].update(_changed_files(commit))
 
         # Create signals from groups with multiple commits (more confident)
         for theme_key, group in theme_groups.items():
@@ -637,19 +652,8 @@ class FileClusterDetector(BaseDetector):
         return signals
 
     def _get_commit_files(self, commit) -> Set[str]:
-        """Extract files changed in a commit."""
-        files = set()
-
-        # Try different attributes that might contain file info
-        if hasattr(commit, 'files_changed_list') and commit.files_changed_list:
-            files.update(commit.files_changed_list)
-        elif hasattr(commit, 'files') and commit.files:
-            if isinstance(commit.files, dict):
-                files.update(commit.files.keys())
-            elif isinstance(commit.files, list):
-                files.update(commit.files)
-
-        return files
+        """Extract files changed in a commit (canonical: CommitRecord.get_changed_files)."""
+        return set(_changed_files(commit))
 
     def _find_clusters(
         self,
