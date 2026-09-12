@@ -15,6 +15,7 @@ from .remove_history import RemoveHistoryCommand
 from .compare_branches import CompareBranchesCommand
 from .worklog import WorklogCommand
 from .brief import BriefCommand
+from .graph import GraphCommand
 
 __all__ = [
     'BaseCommand',
@@ -28,4 +29,5 @@ __all__ = [
     'CompareBranchesCommand',
     'WorklogCommand',
     'BriefCommand',
+    'GraphCommand',
 ]

@@ -19,6 +19,7 @@ from .commands import (
     CompareBranchesCommand,
     WorklogCommand,
     BriefCommand,
+    GraphCommand,
 )
 from .commands.storyline import (
     ListStorylineCommand,
@@ -269,6 +270,47 @@ EXAMPLES:
 def brief(**kwargs):
     """Generate a compact, agent-oriented project history digest."""
     cmd = BriefCommand(**kwargs)
+    cmd.run()
+
+
+GRAPH_HELP = """Build or update the persistent repository graph (no LLM).
+
+\b
+Stores commits, files, authors, PRs, commit→file edges and a repository-wide
+file co-change projection in <repo>/.gitview/graph.sqlite. Incremental: on a
+later run only commits after the stored head are added; a rewritten history
+(rebase, reset, force push) triggers a full rebuild automatically.
+
+\b
+Fully deterministic: no LLM backend, no API key, no network calls.
+
+\b
+EXAMPLES:
+  gitview graph                # Build/update, print counts
+  gitview graph --stats        # Also list most changed / coupled / connected files
+  gitview graph --rebuild      # Drop and rebuild from scratch
+  gitview graph --json         # Machine-readable counts and top lists
+"""
+
+
+@cli.command(help=GRAPH_HELP)
+@click.option('--repo', '-r', default=".",
+              help="Path to a local git repository (default: current directory)")
+@click.option('--branch', default='HEAD',
+              help="Branch to analyze (default: HEAD)")
+@click.option('--rebuild', is_flag=True,
+              help="Discard the existing graph and rebuild from scratch")
+@click.option('--stats', is_flag=True,
+              help="Print most changed / most coupled / most connected files")
+@click.option('--top', type=int, default=10,
+              help="Rows per top list (default: 10)")
+@click.option('--json', 'json_output', is_flag=True,
+              help="Print results as JSON instead of tables")
+@click.option('--max-projection-files', type=int, default=None,
+              help="Commits touching more files than this get no file↔file edges (default: 100)")
+def graph(**kwargs):
+    """Build or update the persistent repository graph."""
+    cmd = GraphCommand(**kwargs)
     cmd.run()
 
 
