@@ -235,6 +235,24 @@ says a narrative is worth it:
 | `balanced` (default) | routine phases (docs churn, small config runs, no motifs, no PR narrative) are written from evidence; the rest go to the model | 3 model calls |
 | `minimal` | only phases with strong signals (significant commits, motifs, PR narratives) go to the model | 3 model calls |
 
+A phase's signal score adds up: a significant commit (an addition or deletion
+over 1,000 lines, or a refactor with real churn) 0.35; a motif *event* landing
+in the phase (ownership handover, a dependency first appearing, a split, a
+centrality jump) 0.20; PR narratives 0.15; two or more kinds of activity 0.15;
+a large phase (15+ commits or 3,000+ changed lines) 0.10. Standing patterns
+such as repeated co-change or a stable interface are shown to the model as
+context but never trigger a call on their own. `balanced` narrates at 0.35,
+`minimal` at 0.6.
+
+Every story prompt (executive summary, timeline, full narrative) ends with a
+block of hard facts taken from git — the exact date span, the complete list of
+contributors, submodules from `.gitmodules`, top-level directories, most
+changed files and version strings seen in commit subjects — followed by rules:
+nothing after the last commit, no technologies that are not in the facts or
+the summaries, plans are not implementations. Long histories are split into
+batches that are stitched chronologically; the former merge call, which saw
+only prose and invented the connecting tissue, is gone.
+
 With `--hierarchical`, per-cluster mini-summaries come from evidence too, so a
 narrated phase costs one call instead of one per cluster plus one. The report
 gains an *Architectural Motifs* section, every prompt that is sent carries the

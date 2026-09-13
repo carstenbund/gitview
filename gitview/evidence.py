@@ -94,7 +94,8 @@ class PhaseEvidence:
     top_files: List[Tuple[str, int]]                       # (path, commits in phase)
     clusters: List[ClusterEvidence]
     coupling: List[Tuple[str, str, int, int]]              # (a, b, in-phase co-changes, all-time)
-    motifs: List[MotifFinding]
+    motifs: List[MotifFinding]                             # context: motifs on this phase's files
+    active_motifs: List[MotifFinding]                      # signal: motifs whose evidence occurs in this phase
     significant_commits: int
     pr_narratives: int
     score: float
@@ -213,6 +214,7 @@ class PhaseEvidence:
             'phase_number': self.phase_number, 'score': round(self.score, 3), 'reasons': self.reasons,
             'top_files': self.top_files, 'clusters': [c.to_dict() for c in self.clusters],
             'coupling': self.coupling, 'motifs': [m.to_dict() for m in self.motifs],
+            'active_motifs': [m.key for m in self.active_motifs],
             'significant_commits': self.significant_commits, 'pr_narratives': self.pr_narratives,
         }
 
@@ -284,15 +286,17 @@ class EvidenceLedger:
             if commits else []
 
         motifs = self._motifs_for(touched, top_set, phase.start_date[:10], phase.end_date[:10])
-        significant = sum(1 for c in commits if c.is_large_deletion or c.is_large_addition or c.is_refactor)
+        phase_hashes = {c.commit_hash for c in commits}
+        active = [m for m in motifs if _active_in_phase(m, phase_hashes, phase.start_date[:10], phase.end_date[:10])]
+        significant = sum(1 for c in commits if _is_significant(c))
         pr_narratives = sum(1 for c in commits if c.has_github_context() and c.get_pr_title())
 
-        score, reasons = _score(phase, clusters, motifs, significant, pr_narratives)
+        score, reasons = _score(phase, commits, clusters, active, significant, pr_narratives)
         evidence = PhaseEvidence(
             phase_number=phase.phase_number, start_date=phase.start_date[:10], end_date=phase.end_date[:10],
             commit_count=phase.commit_count, authors=list(phase.authors), primary_author=phase.primary_author,
             loc_delta=phase.loc_delta, insertions=phase.total_insertions, deletions=phase.total_deletions,
-            top_files=top_files, clusters=clusters, coupling=coupling, motifs=motifs,
+            top_files=top_files, clusters=clusters, coupling=coupling, motifs=motifs, active_motifs=active,
             significant_commits=significant, pr_narratives=pr_narratives, score=score, reasons=reasons,
         )
         self._cache[key] = evidence
@@ -417,6 +421,48 @@ class EvidenceLedger:
             lines.append(f"*Not evaluated: {', '.join(sorted(report.skipped))} — structural observation needed.*")
         return '\n'.join(lines).rstrip() + '\n'
 
+    def hard_facts(self, phases: Sequence[Phase], repo_name: Optional[str] = None) -> str:
+        """Facts every story prompt must respect: span, people, modules, files, versions.
+
+        Rendered as a block the storyteller inserts before the writing
+        instruction, ending with rules that forbid the usual inventions
+        (periods after the last commit, technologies from general knowledge,
+        a "team" where there is one author).
+        """
+        records = self.records
+        if not records:
+            return ''
+        first, last = records[0].timestamp[:10], records[-1].timestamp[:10]
+        authors = Counter(r.author for r in records)
+        dirs: Counter = Counter()
+        for r in records:
+            for path in r.files_stats:
+                if '/' in path:
+                    dirs[path.split('/', 1)[0]] += 1
+        submodules = _submodules(self.repo_path)
+        versions = _version_strings(r.commit_subject for r in records)
+        lines = [f"**Hard facts about {repo_name or self.repo_path.name} (from git; authoritative):**",
+                 f"- History covered: {first} to {last}, {len(records)} commits in {len(phases)} phase(s). "
+                 f"Nothing after {last} has happened.",
+                 "- Contributors (complete list): " + ', '.join(f"{a} ({n} commits)" for a, n in authors.most_common())
+                 + ("" if len(authors) > 1 else " - a single developer, not a team")]
+        if submodules:
+            lines.append("- Git submodules (complete list): " + ', '.join(submodules))
+        if dirs:
+            lines.append("- Top-level directories touched: " + ', '.join(d for d, _ in dirs.most_common(15)))
+        if self.stats.most_changed:
+            lines.append("- Most changed files: " + ', '.join(f.path for f in self.stats.most_changed[:10]))
+        if versions:
+            lines.append("- Version strings that appear in commit subjects: " + ', '.join(versions))
+        lines += [
+            "",
+            "**Rules:** Stay inside these facts and the phase summaries. Do not describe events, periods or "
+            "outcomes after the last commit date. Do not name tools, services, frameworks or technologies "
+            "that do not appear above or in the summaries. Name modules and files exactly as listed. "
+            "Do not present plans or proposals as implemented work.",
+        ]
+        return '\n'.join(lines)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'graph': {'path': str(self.store_path), 'action': self.sync.action, 'reason': self.sync.reason},
@@ -449,15 +495,50 @@ def cluster_summary(cluster: CommitCluster) -> str:
 
 # --------------------------------------------------------------------------- helpers
 
-def _score(phase: Phase, clusters: List[ClusterEvidence], motifs: List[MotifFinding],
-           significant: int, pr_narratives: int) -> Tuple[float, List[str]]:
+#: A refactor-flagged commit needs this much churn before it counts as significant;
+#: the extractor's heuristic also flags 4-line submodule-pointer bumps.
+SIGNIFICANT_REFACTOR_CHURN = 200
+#: Absolute size that makes a phase worth narrating on its own.
+BIG_PHASE_CHURN = 3000
+BIG_PHASE_COMMITS = 15
+
+
+def _is_significant(c: CommitRecord) -> bool:
+    if c.is_large_addition or c.is_large_deletion:
+        return True
+    return bool(c.is_refactor) and (c.insertions + c.deletions) >= SIGNIFICANT_REFACTOR_CHURN
+
+
+#: Motifs that describe an *event* rather than a standing pattern. Only these can
+#: make a phase worth narrating; repeated co-change or a stable interface being
+#: present in a phase is business as usual and stays context.
+EVENT_MOTIFS = {'ownership_transition', 'emerging_dependency', 'architectural_split', 'centrality_growth'}
+
+
+def _active_in_phase(finding: MotifFinding, phase_hashes: Set[str], start: str, end: str) -> bool:
+    """True when the motif's event lands inside this phase."""
+    if finding.motif not in EVENT_MOTIFS:
+        return False
+    ev = finding.evidence
+    handover = ev.get('handover_date')
+    if handover:
+        return start <= handover[:10] <= end
+    for key in ('first_cochange', 'observed_to', 'handover_commit'):
+        sha = ev.get(key)
+        if sha and sha in phase_hashes:
+            return True
+    return False
+
+
+def _score(phase: Phase, commits: List[CommitRecord], clusters: List[ClusterEvidence],
+           active_motifs: List[MotifFinding], significant: int, pr_narratives: int) -> Tuple[float, List[str]]:
     score, reasons = 0.0, []
     if significant:
         score += 0.35
         reasons.append(f"{significant} significant commit(s)")
-    if motifs:
-        score += 0.25
-        reasons.append(f"{len(motifs)} motif(s)")
+    if active_motifs:
+        score += 0.20
+        reasons.append(f"{len(active_motifs)} active motif(s)")
     if pr_narratives:
         score += 0.15
         reasons.append(f"{pr_narratives} PR narrative(s)")
@@ -465,9 +546,10 @@ def _score(phase: Phase, clusters: List[ClusterEvidence], motifs: List[MotifFind
     if len({c.type for c in rich}) >= 2:
         score += 0.15
         reasons.append("mixed activity")
-    if phase.commit_count >= 10 or abs(phase.loc_delta_percent) >= 10:
+    churn = sum(c.insertions + c.deletions for c in commits)
+    if len(commits) >= BIG_PHASE_COMMITS or churn >= BIG_PHASE_CHURN:
         score += 0.10
-        reasons.append("large phase")
+        reasons.append(f"large phase ({churn:,} lines)")
     if phase.readme_changed:
         score += 0.05
     return min(score, 1.0), reasons
@@ -503,6 +585,29 @@ def _language_shift(start: Dict[str, int], end: Dict[str, int]) -> str:
     if not start and not end:
         return ''
     return f"Language mix went from {mix(start) or 'n/a'} to {mix(end) or 'n/a'}."
+
+
+def _submodules(repo_path: Path) -> List[str]:
+    """Submodule paths from ``.gitmodules``, in file order."""
+    gitmodules = repo_path / '.gitmodules'
+    try:
+        text = gitmodules.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return []
+    return re.findall(r'^\s*path\s*=\s*(\S+)', text, flags=re.MULTILINE)
+
+
+_VERSION_RE = re.compile(r'(?<![\w.])v?(\d+\.\d+(?:\.\d+){0,2})(?![\w.])')
+
+
+def _version_strings(subjects: Iterable[str], limit: int = 12) -> List[str]:
+    """Distinct version-like tokens in commit subjects, most frequent first, then sorted."""
+    counts: Counter = Counter()
+    for subject in subjects:
+        for v in _VERSION_RE.findall(subject or ''):
+            counts[v] += 1
+    top = [v for v, _ in counts.most_common(limit)]
+    return sorted(top, key=lambda v: tuple(int(x) for x in v.split('.')))
 
 
 def _short(text: Optional[str], n: int) -> str:

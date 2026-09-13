@@ -22,7 +22,8 @@ class HierarchicalStoryTeller:
         self.max_phases_per_prompt = max_phases_per_prompt
 
     def generate_timeline(self, phases: List[Phase],
-                         repo_name: Optional[str] = None) -> str:
+                         repo_name: Optional[str] = None,
+                         facts: Optional[str] = None) -> str:
         """
         Generate chronological timeline with preserved details.
 
@@ -45,8 +46,11 @@ class HierarchicalStoryTeller:
         # Prepare phase data with full context
         phase_data = self._prepare_hierarchical_phase_data(phases)
 
-        # Build timeline prompt
+        # Build timeline prompt, with the hard facts right before the writing instruction
         prompt = self._build_hierarchical_timeline_prompt(phase_data, repo_name)
+        if facts:
+            head, _, tail = prompt.rstrip().rpartition('\n')
+            prompt = f"{head}\n\n{facts}\n\n{tail}"
 
         # Generate timeline
         messages = [LLMMessage(role="user", content=prompt)]

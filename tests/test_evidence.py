@@ -38,6 +38,7 @@ def _records(n_routine=6, feature=True):
         ]
     if feature:
         records[n_routine + 2].is_refactor = True
+        records[n_routine + 2].insertions, records[n_routine + 2].deletions = 160, 150
     for i, r in enumerate(records):
         r.commit_subject = f"{'docs: tweak readme' if r.files_stats.get('README.md') else 'feat: core work'} {i}"
         r.commit_message = r.commit_subject
@@ -96,8 +97,21 @@ def test_routine_phase_scores_low_and_feature_phase_high(tmp_path, synthetic_rep
     assert ev_r.score < LLM_BUDGETS['balanced']
     assert ev_f.score >= LLM_BUDGETS['balanced']
     assert '1 significant commit(s)' in ev_f.reasons
+    assert ev_f.active_motifs == []          # repeated co-change is context, not an event
     assert ev_f.top_files[0][0] in {'src/core.py', 'src/api.py'}
     assert ev_f.coupling and ev_f.coupling[0][:2] == ('src/api.py', 'src/core.py')
+
+
+def test_tiny_refactors_and_timeless_motifs_are_not_signals(tmp_path, synthetic_repo):
+    records = _records()
+    # A 4-line "refactor" (the extractor flags submodule-pointer bumps this way) must not count.
+    records[2].is_refactor = True
+    records[2].insertions, records[2].deletions = 2, 2
+    routine, _ = _phases(records, chunk_size=6)
+    ev = _ledger(tmp_path, records, synthetic_repo).phase_evidence(routine)
+    assert ev.significant_commits == 0
+    assert ev.active_motifs == []
+    assert ev.score < LLM_BUDGETS['balanced']
 
 
 def test_router_counts_calls(stub_llm):
@@ -165,6 +179,65 @@ def test_repository_sections(tmp_path, synthetic_repo):
     assert 'structural observation needed' in arch
 
 
+def test_hard_facts_state_span_people_modules_and_rules(tmp_path, synthetic_repo):
+    records = _records()
+    phases = _phases(records, chunk_size=6)
+    (synthetic_repo / '.gitmodules').write_text(
+        '[submodule "api"]\n\tpath = oebv-api\n\turl = x\n[submodule "db"]\n\tpath = oebv-db\n\turl = y\n')
+    records[-1].commit_subject = 'chore: bump schema to v6.23'
+    facts = _ledger(tmp_path, records, synthetic_repo).hard_facts(phases, 'demo')
+
+    assert 'History covered: 2026-01-01 to 2026-02-04, 10 commits in 2 phase(s)' in facts
+    assert 'Nothing after 2026-02-04 has happened' in facts
+    assert 'Doc (6 commits)' in facts and 'Dev (4 commits)' in facts
+    assert 'Git submodules (complete list): oebv-api, oebv-db' in facts
+    assert 'Top-level directories touched: src, tests' in facts
+    assert 'Version strings that appear in commit subjects: 6.23' in facts
+    assert 'Do not present plans or proposals as implemented work' in facts
+
+
+# ---------------------------------------------------------------------------
+# storyteller: facts in every prompt, batches stitched without a merge call
+# ---------------------------------------------------------------------------
+
+def _summary_phases(n):
+    from types import SimpleNamespace
+    return [SimpleNamespace(
+        phase_number=i, start_date=f"2026-01-{i:02d}", end_date=f"2026-01-{i:02d}", commit_count=3,
+        loc_delta=10, loc_delta_percent=1.0, total_insertions=12, total_deletions=2, authors=['Dev'],
+        primary_author='Dev', has_large_deletion=False, has_large_addition=False, has_refactor=False,
+        readme_changed=False, summary=f"phase {i} summary", commits=[]) for i in range(1, n + 1)]
+
+
+def test_storyteller_puts_facts_before_the_instruction_and_stitches_batches(stub_llm):
+    from gitview.storyteller import StoryTeller
+    teller = StoryTeller(backend='anthropic', api_key='x', max_phases_per_prompt=2,
+                         facts='**Hard facts about demo**\n- History covered: 2026-01-01 to 2026-01-05',
+                         precomputed_sections={'technical_evolution': 'T', 'deletion_story': 'D'})
+    stories = teller.generate_global_story(_summary_phases(5), 'demo')
+
+    # 5 phases in batches of 2 -> 3 calls per model-written section, no merge call.
+    assert stub_llm.calls == 3 * 3
+    for prompt in stub_llm.prompts:
+        assert 'Hard facts about demo' in prompt
+        stripped = prompt.rstrip()
+        assert stripped.rpartition('\n')[2].startswith('Write the')   # instruction still closes the prompt
+        assert stripped.rfind('Hard facts about demo') > len(stripped) - 700  # facts sit just before it
+    assert any('part 2 of 3' in p and 'phases 3-4' in p for p in stub_llm.prompts)
+    assert stories['full_narrative'].count('### 2026-01-') == 3     # stitched, chronological
+    assert stories['timeline'].count('Model narrative.') == 3
+    assert stories['technical_evolution'] == 'T'
+
+
+def test_storyteller_single_prompt_when_it_fits(stub_llm):
+    from gitview.storyteller import StoryTeller
+    teller = StoryTeller(backend='anthropic', api_key='x', facts='F',
+                         precomputed_sections={'technical_evolution': 'T', 'deletion_story': 'D'})
+    teller.generate_global_story(_summary_phases(5), 'demo')
+    assert stub_llm.calls == 3
+    assert all('part 1 of' not in p for p in stub_llm.prompts)
+
+
 # ---------------------------------------------------------------------------
 # analyze end to end (stubbed model): fewer calls, same outputs
 # ---------------------------------------------------------------------------
@@ -184,12 +257,14 @@ def _repo_with_history(tmp_path):
         'src/core.py': 'def b():\n    return 3\n' * 80, 'src/api.py': 'import core  # v3\n' * 80})
     _write_and_commit(repo, "feat: util", **{'src/util.py': 'x = 1\n' * 60,
                                              'src/core.py': 'def b():\n    return 4\n' * 80})
+    # A >1000-line addition: the one commit that makes the second phase worth narrating.
+    _write_and_commit(repo, "feat: generated client", **{'src/client.py': 'pass\n' * 1200})
     return repo
 
 
 def _run_analyze(repo, out, *extra):
     return CliRunner().invoke(cli, ['analyze', '--repo', str(repo), '--output', str(out),
-                                    '--backend', 'anthropic', '--strategy', 'fixed', '--chunk-size', '5',
+                                    '--backend', 'anthropic', '--strategy', 'fixed', '--chunk-size', '6',
                                     *extra])
 
 
@@ -198,7 +273,8 @@ def test_analyze_balanced_budget_spends_fewer_calls(tmp_path, stub_llm):
     result = _run_analyze(repo, tmp_path / 'out', '--llm-budget', 'balanced')
     assert result.exit_code == 0, result.output
 
-    # 2 phases; the routine docs phase is written from evidence, the feature phase by the model.
+    # 2 phases (6 docs commits, then 5 feature commits incl. a >1000-line addition);
+    # the routine docs phase is written from evidence, the feature phase by the model.
     # Story: 5 sections minus the two pre-rendered ones = 3 calls.
     assert stub_llm.calls == 1 + 3
     assert 'from evidence' in result.output
@@ -209,8 +285,10 @@ def test_analyze_balanced_budget_spends_fewer_calls(tmp_path, stub_llm):
     assert '### Where change concentrated' in story          # deterministic technical evolution
     data = json.loads((tmp_path / 'out' / 'history_data.json').read_text())
     assert len(data['phases']) == 2
-    # The model prompt for the narrated phase carried the evidence block.
+    # The model prompt for the narrated phase carried the evidence block, and
+    # every story prompt carried the hard facts.
     assert any('Established Evidence' in p for p in stub_llm.prompts)
+    assert sum('Hard facts about' in p for p in stub_llm.prompts) == 3
 
 
 def test_analyze_full_budget_calls_model_for_every_phase(tmp_path, stub_llm):

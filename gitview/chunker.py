@@ -1,6 +1,7 @@
 """Chunk git history into meaningful epochs/phases."""
 
 import json
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict, fields
@@ -342,8 +343,11 @@ class HistoryChunker:
         input_path = Path(input_dir)
         phases = []
 
-        # Find all phase files
-        phase_files = sorted(input_path.glob("phase_*.json"))
+        # Only the chunker's own phase_NN.json files. The phases directory also
+        # holds other artifacts (phase summaries, storyline state) whose names
+        # start with "phase_" and which are not Phase records.
+        phase_files = sorted(f for f in input_path.glob("phase_*.json")
+                             if re.fullmatch(r"phase_\d+\.json", f.name))
 
         for phase_file in phase_files:
             with open(phase_file, 'r') as f:

@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,21 +14,33 @@ from gitview.backends.router import LLMBackend, LLMRouter
 
 
 def _fake_claude(tmp_path: Path, result: str = "OK", is_error: bool = False) -> Path:
-    """A stand-in `claude` that records its argv and stdin and prints a print-mode JSON envelope."""
+    """A stand-in `claude` that records its argv and stdin and prints a print-mode JSON envelope.
+
+    The behaviour lives in a Python file; the launcher differs per platform because
+    ``shutil.which`` only finds extension-less scripts on POSIX and only PATHEXT
+    files (``.cmd``, ``.exe``, …) on Windows.
+    """
     log = tmp_path / "calls.json"
-    exe = tmp_path / "bin" / "claude"
-    exe.parent.mkdir(exist_ok=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
     payload = json.dumps({"type": "result", "subtype": "success", "is_error": is_error,
                           "result": result, "stop_reason": "end_turn", "session_id": "s",
                           "usage": {"input_tokens": 10, "cache_read_input_tokens": 5, "output_tokens": 3},
                           "modelUsage": {"claude-sonnet-5": {}}})
-    exe.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        f"json.dump({{'argv': sys.argv[1:], 'stdin': sys.stdin.read(), 'cwd': __import__('os').getcwd(),\n"
-        f"           'env_has_claudecode': 'CLAUDECODE' in __import__('os').environ}}, open({str(log)!r}, 'w'))\n"
+    impl = bin_dir / "claude_impl.py"
+    impl.write_text(
+        "import json, os, sys\n"
+        f"json.dump({{'argv': sys.argv[1:], 'stdin': sys.stdin.read(), 'cwd': os.getcwd(),\n"
+        f"           'env_has_claudecode': 'CLAUDECODE' in os.environ}}, open({str(log)!r}, 'w'))\n"
         f"print({payload!r})\n")
-    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    if os.name == "nt":
+        launcher = bin_dir / "claude.cmd"
+        launcher.write_text(f'@"{sys.executable}" "%~dp0claude_impl.py" %*\r\n')
+    else:
+        launcher = bin_dir / "claude"
+        launcher.write_text(f"#!{sys.executable}\n"
+                            f"import runpy; runpy.run_path({str(impl)!r}, run_name='__main__')\n")
+        launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
     return log
 
 
@@ -50,7 +63,7 @@ def test_generate_runs_cli_in_print_mode(tmp_path, monkeypatch):
     assert call["stdin"] == "summarise"
     assert "-p" in call["argv"] and "--model" in call["argv"] and "haiku" in call["argv"]
     assert "--no-session-persistence" in call["argv"]
-    assert call["cwd"] != os.getcwd()           # neutral cwd: no CLAUDE.md / hooks of the analysed repo
+    assert "--tools" not in call["argv"]      # same shape as graphify's proven invocation
     assert call["env_has_claudecode"] is False  # nested-session markers stripped
 
 
