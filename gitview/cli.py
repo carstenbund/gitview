@@ -343,6 +343,10 @@ growth, architectural split).
 PROVIDERS:
   graphify   reads <repo>/graphify-out/graph.json (run `graphify update` first,
              or pass --refresh to let GitView run it)
+             Inside a git submodule with no graph of its own, the
+             superproject's graphify-out/ is used and re-based under the
+             module's path: one graph built at the superproject root
+             serves every module.
 
 \b
 EXAMPLES:

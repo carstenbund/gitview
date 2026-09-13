@@ -138,6 +138,75 @@ def test_translate_falls_back_to_caller_sha_without_built_at_commit():
     assert snap.observed_sha == 'b' * 40
 
 
+SUPERPROJECT_JSON = {
+    'directed': False,
+    'built_at_commit': 'b' * 40,          # the superproject's commit, not the module's
+    'nodes': [
+        _node('api_app', 'api/app.py'),
+        _node('api_models', 'api/models.py', community=1, community_name='Data'),
+        _node('web_index', 'web/index.js', community=2, community_name='UI'),
+        _node('root_readme', 'README.md', file_type='document'),
+    ],
+    'links': [
+        _link('api_app', 'api_models', 'imports'),
+        _link('web_index', 'api_app', 'calls'),          # crosses the module boundary: dropped
+        _link('root_readme', 'api_app', 'references'),   # from outside the module: dropped
+    ],
+}
+
+
+def test_translate_rebases_under_path_prefix():
+    snap = translate(SUPERPROJECT_JSON, sha='c' * 40, source='s', content_hash='h',
+                     provider_version='0', observed_at='t', path_prefix='api')
+    assert snap.paths() == {'app.py', 'models.py'}
+    assert [(e.source, e.target, e.relation) for e in snap.edges] == [('app.py', 'models.py', 'imports')]
+    assert next(n for n in snap.nodes if n.path == 'models.py').community_name == 'Data'
+    # built_at_commit belongs to the superproject; the module records its own tip
+    assert snap.observed_sha == 'c' * 40
+
+
+def test_translate_without_prefix_keeps_superproject_paths():
+    snap = translate(SUPERPROJECT_JSON, sha='c' * 40, source='s', content_hash='h',
+                     provider_version='0', observed_at='t')
+    assert 'api/app.py' in snap.paths() and 'web/index.js' in snap.paths()
+    assert snap.observed_sha == 'b' * 40
+
+
+def test_provider_rebases_explicit_source_via_root_marker(tmp_path):
+    super_root = tmp_path / 'super'
+    graph = _write_graph(super_root, SUPERPROJECT_JSON)
+    (graph.parent / '.graphify_root').write_text(str(super_root))
+    module = super_root / 'api'
+    module.mkdir()
+    provider = GraphifyProvider(executable='definitely-not-installed')
+    snap = provider.snapshot(module, 'c' * 40, source=graph)
+    assert snap.paths() == {'app.py', 'models.py'}
+    assert snap.observed_sha == 'c' * 40
+    assert snap.source.endswith('[api/]')
+
+
+def test_provider_finds_superproject_graph_for_submodule(tmp_path, monkeypatch):
+    super_root = tmp_path / 'super'
+    _write_graph(super_root, SUPERPROJECT_JSON)
+    module = super_root / 'api'
+    module.mkdir()
+    import gitview.structural.graphify as mod
+    monkeypatch.setattr(mod, '_superproject_of',
+                        lambda repo: super_root if Path(repo).resolve() == module.resolve() else None)
+    provider = GraphifyProvider(executable='definitely-not-installed')
+    snap = provider.snapshot(module, 'c' * 40)
+    assert snap.paths() == {'app.py', 'models.py'}
+    assert snap.observed_sha == 'c' * 40
+
+
+def test_provider_without_graph_or_superproject_still_errors(tmp_path, monkeypatch):
+    import gitview.structural.graphify as mod
+    monkeypatch.setattr(mod, '_superproject_of', lambda repo: None)
+    provider = GraphifyProvider(executable='definitely-not-installed')
+    with pytest.raises(StructuralProviderError):
+        provider.snapshot(tmp_path, 'c' * 40)
+
+
 def test_provider_reads_existing_output_without_running_graphify(tmp_path):
     graph_file = _write_graph(tmp_path)
     provider = GraphifyProvider(executable='definitely-not-installed-graphify')

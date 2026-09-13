@@ -252,6 +252,13 @@ is missing — so `gitview motifs` always works, just with fewer motifs:
 | History + one observation | hidden coupling, confirmed coupling, stable interface |
 | History + observations at two or more commits | emerging dependency, architectural split, centrality growth |
 
+In a multi-repository layout (git submodules), build Graphify once at the
+superproject root; `gitview observe` run inside a module finds that graph on
+its own and re-bases it under the module's path, so each module's history is
+matched against the structure of the whole system. Edges into other modules
+are dropped (they have no counterpart in this module's history), and the
+observation records the module's own commit.
+
 Observe again after significant work (or from an older commit via `--source`)
 to enable the series motifs; GitView orders observations by their commit's
 position in the history graph and reports, for example, how many commits of
