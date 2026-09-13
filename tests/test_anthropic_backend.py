@@ -16,7 +16,10 @@ class _Messages:
     def create(self, **kw):
         self.calls.append(kw)
         if self.reject and 'temperature' in kw:
-            import httpx
+            try:
+                import httpx                # anthropic 0.x
+            except ImportError:             # anthropic 1.x is built on httpx2
+                import httpx2 as httpx
             from anthropic import BadRequestError
             resp = httpx.Response(400, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
             raise BadRequestError("`temperature` is deprecated for this model.", response=resp, body=None)
