@@ -223,6 +223,24 @@ gitview graph --rebuild           # Drop and rebuild from scratch
 gitview graph --json              # Machine-readable output
 ```
 
+### Evidence-First Analysis (Fewer LLM Calls)
+
+`gitview analyze` builds the repository graph and runs the motif catalogue
+*before* it talks to a model, then spends model calls only where the evidence
+says a narrative is worth it:
+
+| `--llm-budget` | Phase summaries | Story sections |
+|----------------|-----------------|----------------|
+| `full` | every phase goes to the model, with an evidence block in the prompt | 3 model calls; technical evolution and deletions are rendered from evidence |
+| `balanced` (default) | routine phases (docs churn, small config runs, no motifs, no PR narrative) are written from evidence; the rest go to the model | 3 model calls |
+| `minimal` | only phases with strong signals (significant commits, motifs, PR narratives) go to the model | 3 model calls |
+
+With `--hierarchical`, per-cluster mini-summaries come from evidence too, so a
+narrated phase costs one call instead of one per cluster plus one. The report
+gains an *Architectural Motifs* section, every prompt that is sent carries the
+established facts (clusters, hot files, coupling, motifs), and the run ends
+with `LLM calls this run: N`. `--no-evidence` restores the previous behaviour.
+
 ### Structural Evidence & Motifs (No LLM)
 
 GitView's graph is built from git history alone. A *structural provider* — an

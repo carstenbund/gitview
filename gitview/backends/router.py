@@ -60,6 +60,7 @@ class LLMRouter:
 
         # Determine model
         self.model = model or self.DEFAULT_MODELS[self.backend_type]
+        self.calls = 0
 
         # Determine API key
         if api_key:
@@ -137,7 +138,17 @@ class LLMRouter:
             LLMResponse object
         """
         backend = self._get_backend()
+        LLMRouter.total_calls += 1
+        self.calls += 1
         return backend.generate(messages, max_tokens, **kwargs)
+
+    #: Process-wide number of model calls made through any router (analyze reports it).
+    total_calls: int = 0
+
+    @classmethod
+    def reset_call_count(cls) -> int:
+        previous, cls.total_calls = cls.total_calls, 0
+        return previous
 
     def generate_text(self, prompt: str, max_tokens: int = 2000, **kwargs) -> str:
         """

@@ -169,6 +169,13 @@ EXAMPLES:
               help="GitHub token for PR/review context enrichment")
 @click.option('--adaptive', is_flag=True,
               help="Enable adaptive agent mode: discovery-driven analysis that reacts to findings")
+@click.option('--llm-budget', type=click.Choice(['full', 'balanced', 'minimal']), default='balanced',
+              help="How freely to spend model calls: 'full' summarizes every phase with the LLM, "
+                   "'balanced' (default) writes routine phases from repository evidence, "
+                   "'minimal' calls the LLM only for phases with strong signals")
+@click.option('--evidence/--no-evidence', default=True,
+              help="Build the repository graph and motifs first and use them as evidence "
+                   "(fewer and better-grounded LLM calls; default: on)")
 def analyze(**kwargs):
     """Analyze git repository and generate narrative history."""
     cmd = AnalyzeCommand(**kwargs)

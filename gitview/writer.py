@@ -60,9 +60,11 @@ class OutputWriter:
             f.write("3. [Full Narrative](#full-narrative)\n")
             f.write("4. [Technical Evolution](#technical-evolution)\n")
             f.write("5. [Story of Deletions](#story-of-deletions)\n")
-            f.write("6. [Storylines](#storylines)\n")
-            f.write("7. [Phase Details](#phase-details)\n")
-            f.write("8. [Statistics](#statistics)\n\n")
+            if stories.get('architecture'):
+                f.write("6. [Architectural Motifs](#architectural-motifs)\n")
+            f.write("7. [Storylines](#storylines)\n")
+            f.write("8. [Phase Details](#phase-details)\n")
+            f.write("9. [Statistics](#statistics)\n\n")
             f.write("---\n\n")
 
             # Executive Summary
@@ -89,6 +91,12 @@ class OutputWriter:
             f.write("## Story of Deletions\n\n")
             f.write(stories['deletion_story'])
             f.write("\n\n---\n\n")
+
+            # Architectural motifs (deterministic, from gitview.evidence)
+            if stories.get('architecture'):
+                f.write("## Architectural Motifs\n\n")
+                f.write(stories['architecture'])
+                f.write("\n\n---\n\n")
 
             # Storylines section (if available)
             if stories.get('storylines'):

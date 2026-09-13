@@ -27,7 +27,14 @@ class HierarchicalPhaseSummarizer:
 
     def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
                  api_key: Optional[str] = None, **kwargs):
-        """Initialize with LLM backend."""
+        """Initialize with LLM backend.
+
+        ``cluster_llm=False`` summarizes each commit cluster deterministically
+        (see :func:`gitview.evidence.cluster_summary`) and spends the model on
+        the phase narrative only: one call per phase instead of one per cluster
+        plus one.
+        """
+        self.cluster_llm = kwargs.pop('cluster_llm', True)
         self.router = LLMRouter(backend=backend, model=model, api_key=api_key, **kwargs)
         self.analyzer = SignificanceAnalyzer()
 
@@ -101,6 +108,10 @@ class HierarchicalPhaseSummarizer:
 
     def _summarize_cluster(self, cluster: CommitCluster) -> str:
         """Generate concise summary for a commit cluster."""
+        if not self.cluster_llm:
+            from .evidence import cluster_summary
+            return cluster_summary(cluster)
+
         details = self.analyzer.extract_significant_details(cluster)
 
         prompt = f"""Summarize this group of related commits in 1-2 sentences.
