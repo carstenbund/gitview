@@ -211,6 +211,12 @@ class StoryTeller:
             })
         if self.precomputed_sections:
             phase_fingerprint.append({'precomputed': sorted(self.precomputed_sections.items())})
+        # Anything that changes the prompts must change the key, or a re-run with
+        # new --directives / --critical / --todo would silently return the old story.
+        if self.directives or self.critical_mode or self.todo_content:
+            phase_fingerprint.append({'prompt': {'directives': self.directives,
+                                                 'critical': self.critical_mode,
+                                                 'todo': self.todo_content}})
 
         # Convert to JSON and hash
         fingerprint_str = json.dumps(phase_fingerprint, sort_keys=True)
