@@ -86,7 +86,7 @@ class StorylineReporter:
         if emerging:
             lines.append("## Emerging Storylines (Unconfirmed)\n")
             for sl in emerging:
-                lines.append(f"- **{sl.title}** ({sl.category.value}): {sl.description[:100]}")
+                lines.append(f"- **{sl.title}** ({sl.category.value}): {_clip(sl.description, 100)}")
             lines.append("")
 
         return '\n'.join(lines)
@@ -278,7 +278,7 @@ class StorylineReporter:
             lines.append("Storylines that span 3 or more phases:\n")
             for sl in sorted(long_running, key=lambda x: -len(x.phases_involved)):
                 duration = len(sl.phases_involved)
-                lines.append(f"- **{sl.title}** ({duration} phases): {sl.current_summary[:100]}")
+                lines.append(f"- **{sl.title}** ({duration} phases): {_clip(sl.current_summary, 100)}")
             lines.append("")
 
         # Theme 2: Recently completed
@@ -428,3 +428,12 @@ def generate_storyline_section_for_markdown(
         sections.append(reporter.generate_cross_phase_themes())
 
     return '\n\n'.join(sections)
+
+
+def _clip(text: str, limit: int) -> str:
+    """Shorten to ``limit`` characters at a word boundary, marking the cut."""
+    text = (text or '').strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(' ', 1)[0].rstrip(' ,;:-') or text[:limit]
+    return cut + '…'

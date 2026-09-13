@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List
 
 #: Bump when the SQLite schema changes incompatibly (forces a rebuild).
-GRAPH_SCHEMA_VERSION = 1
+GRAPH_SCHEMA_VERSION = 2
 
 #: Bump when the co-change projection semantics change (forces re-projection).
 PROJECTION_VERSION = 1

@@ -459,7 +459,8 @@ class EvidenceLedger:
             "**Rules:** Stay inside these facts and the phase summaries. Do not describe events, periods or "
             "outcomes after the last commit date. Do not name tools, services, frameworks or technologies "
             "that do not appear above or in the summaries. Name modules and files exactly as listed. "
-            "Do not present plans or proposals as implemented work.",
+            "Do not present plans or proposals as implemented work. Do not infer motives, intentions or "
+            "turning points that the commits do not state.",
         ]
         return '\n'.join(lines)
 

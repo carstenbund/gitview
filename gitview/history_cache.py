@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from git import Repo
 
-from .extractor import CommitRecord, GitHistoryExtractor
+from .extractor import EXTRACTION_VERSION, CommitRecord, GitHistoryExtractor
 
 GITVIEW_DIR = ".gitview"
 HISTORY_CACHE_FILE = "history.jsonl"
@@ -80,7 +80,8 @@ def load_or_extract_history(
     cached: Optional[List[CommitRecord]] = None
     if cache_path.exists():
         try:
-            cached = extractor.load_from_jsonl(str(cache_path))
+            if extractor.jsonl_extraction_version(str(cache_path)) == EXTRACTION_VERSION:
+                cached = extractor.load_from_jsonl(str(cache_path))
         except Exception:
             cached = None
 

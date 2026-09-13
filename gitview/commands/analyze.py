@@ -671,6 +671,12 @@ class AnalyzeCommand(BaseCommand):
         cached_phases = None
 
         if history_file.exists():
+            from ..extractor import EXTRACTION_VERSION
+            version = GitHistoryExtractor.jsonl_extraction_version(str(history_file))
+            if version != EXTRACTION_VERSION:
+                self.print_info(f"Cached history was extracted with an older counting method "
+                                f"(v{version}, current v{EXTRACTION_VERSION}); re-extracting.\n")
+                return None, None
             try:
                 cached_records = GitHistoryExtractor.load_from_jsonl(str(history_file))
             except Exception as exc:

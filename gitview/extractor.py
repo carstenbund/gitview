@@ -24,6 +24,13 @@ _BINARY_EXTENSIONS = {
 
 # Bounds for comment scanning, to keep memory flat on commits that touch many
 # and/or very large files.
+#: Bump when the way commits are counted changes. Caches written by an older
+#: version (repo_history.jsonl, .gitview/history.jsonl) are re-extracted.
+#: 2: merges carry no churn (first-parent semantics, as `git log --numstat`),
+#:    renames are detected (-M) instead of counting as delete + insert.
+EXTRACTION_VERSION = 2
+_JSONL_HEADER_KEY = 'gitview_extraction_version'
+
 _COMMENT_MAX_FILE_BYTES = 1_000_000  # skip individual files larger than ~1 MB
 _COMMENT_MAX_FILES = 40              # scan at most this many changed code files
 
@@ -376,19 +383,27 @@ class GitHistoryExtractor:
             'files': {}
         }
 
-        try:
-            file_stats = commit.stats.files
-        except Exception:
+        # A merge commit's diff against its first parent re-reports every
+        # change the merged branch already made in its own commits, so the
+        # branch work would be counted twice. `git log --numstat` shows no
+        # diff for merges; do the same.
+        if len(commit.parents) > 1:
             return stats
 
-        for file_path, per_file in file_stats.items():
+        try:
+            file_stats = self._numstat_with_renames(commit)
+        except Exception:
+            try:
+                file_stats = {p: (int(d.get('insertions', 0) or 0), int(d.get('deletions', 0) or 0))
+                              for p, d in commit.stats.files.items()}
+            except Exception:
+                return stats
+
+        for file_path, (insertions, deletions) in file_stats.items():
             try:
                 ext = Path(file_path).suffix.lower()
                 if ext in _BINARY_EXTENSIONS:
                     continue
-
-                insertions = int(per_file.get('insertions', 0) or 0)
-                deletions = int(per_file.get('deletions', 0) or 0)
 
                 stats['insertions'] += insertions
                 stats['deletions'] += deletions
@@ -401,6 +416,39 @@ class GitHistoryExtractor:
                 continue
 
         return stats
+
+    @staticmethod
+    def _numstat_with_renames(commit: git.Commit) -> Dict[str, tuple]:
+        """``{path: (insertions, deletions)}`` for a non-merge commit, with rename detection.
+
+        ``git diff-tree -M --numstat -z``: a rename is reported once, under its
+        new path, with only the lines that actually changed, instead of as a
+        full deletion plus a full insertion. Binary files (``-\t-``) are skipped.
+        """
+        out = commit.repo.git.diff_tree(
+            '--no-commit-id', '--root', '-r', '-M', '-z', '--numstat', commit.hexsha)
+        fields = out.split('\0')
+        result: Dict[str, tuple] = {}
+        i = 0
+        while i < len(fields):
+            head = fields[i]
+            i += 1
+            if not head:
+                continue
+            parts = head.split('\t')
+            if len(parts) < 3:
+                continue
+            ins, dels, path = parts[0], parts[1], parts[2]
+            if path == '':
+                # rename/copy: the next two NUL-separated fields are the old and new path
+                if i + 1 >= len(fields):
+                    break
+                path = fields[i + 1]
+                i += 2
+            if ins == '-' or dels == '-':
+                continue
+            result[path] = (int(ins), int(dels))
+        return result
 
     def _get_language_breakdown(self, commit: git.Commit) -> Dict[str, int]:
         """Get language breakdown for files in commit."""
@@ -533,9 +581,22 @@ class GitHistoryExtractor:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_file, 'w') as f:
+            json.dump({_JSONL_HEADER_KEY: EXTRACTION_VERSION}, f)
+            f.write('\n')
             for record in records:
                 json.dump(record.to_dict(), f)
                 f.write('\n')
+
+    @staticmethod
+    def jsonl_extraction_version(input_path: str) -> int:
+        """Extraction version a JSONL file was written with (1 for files without a header)."""
+        try:
+            with open(input_path, 'r') as f:
+                first = f.readline()
+            data = json.loads(first) if first.strip() else {}
+        except (OSError, json.JSONDecodeError):
+            return 1
+        return int(data.get(_JSONL_HEADER_KEY, 1)) if isinstance(data, dict) else 1
 
     @staticmethod
     def load_from_jsonl(input_path: str) -> List[CommitRecord]:
@@ -544,7 +605,11 @@ class GitHistoryExtractor:
 
         with open(input_path, 'r') as f:
             for line in f:
+                if not line.strip():
+                    continue
                 data = json.loads(line)
+                if _JSONL_HEADER_KEY in data:
+                    continue
                 # Convert dict back to CommitRecord
                 records.append(CommitRecord(**data))
 
