@@ -216,9 +216,11 @@ class OutputWriter:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Calculate metadata from phases
+        from .extractor import EXTRACTION_VERSION
         metadata = {
             'generated_at': datetime.now().isoformat(),
             'total_commits_analyzed': sum(p.commit_count for p in phases),
+            'extraction_version': EXTRACTION_VERSION,
         }
 
         # Add last commit info if phases exist

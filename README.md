@@ -253,6 +253,12 @@ the summaries, plans are not implementations. Long histories are split into
 batches that are stitched chronologically; the former merge call, which saw
 only prose and invented the connecting tissue, is gone.
 
+Line counts follow git's own arithmetic: merge commits carry no churn (the
+merged branch's commits are already counted, as with `git log --numstat`) and
+renames are detected, so a moved file is not a deletion plus an insertion.
+Caches carry an extraction version; history extracted by an older GitView is
+re-extracted automatically, and `gitview graph` rebuilds once.
+
 With `--hierarchical`, per-cluster mini-summaries come from evidence too, so a
 narrated phase costs one call instead of one per cluster plus one. The report
 gains an *Architectural Motifs* section, every prompt that is sent carries the

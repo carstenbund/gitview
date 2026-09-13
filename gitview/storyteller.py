@@ -46,6 +46,7 @@ class StoryTeller:
         # Deterministic facts (see EvidenceLedger.hard_facts) placed in every
         # prompt right before the writing instruction.
         self.facts = facts or ''
+        self.timeline_phases_per_prompt = 10
         # Limit how many phases are fed to the model in a single request to avoid
         # context blowups on very large histories.
         self.max_phases_per_prompt = max_phases_per_prompt
@@ -118,6 +119,7 @@ class StoryTeller:
         repo_name: Optional[str],
         build_prompt_fn,
         initial_max_tokens: int,
+        phases_per_prompt: Optional[int] = None,
     ) -> str:
         """Generate a section, batching phases to respect context limits.
 
@@ -126,15 +128,17 @@ class StoryTeller:
         periods and technologies used to enter the narrative.
         """
 
-        if len(phase_summaries) <= self.max_phases_per_prompt:
+        limit = phases_per_prompt or self.max_phases_per_prompt
+        if len(phase_summaries) <= limit:
             prompt = self._with_facts(build_prompt_fn(phase_summaries, repo_name))
             messages = [LLMMessage(role="user", content=prompt)]
             response = self._generate_with_context_guard(
                 messages, initial_max_tokens=initial_max_tokens
             )
+            self._warn_if_truncated(section_name, response)
             return response.content.strip()
 
-        batches = self._chunk_phase_summaries(phase_summaries)
+        batches = self._chunk_phase_summaries(phase_summaries, limit)
         parts: List[str] = []
         for index, batch in enumerate(batches, 1):
             span = f"{batch[0]['start_date']} to {batch[-1]['end_date']}"
@@ -147,8 +151,17 @@ class StoryTeller:
             response = self._generate_with_context_guard(
                 messages, initial_max_tokens=initial_max_tokens
             )
+            self._warn_if_truncated(f"{section_name} part {index}", response)
             parts.append((span, response.content.strip()))
         return self._stitch(section_name, parts)
+
+    @staticmethod
+    def _warn_if_truncated(label: str, response) -> None:
+        """The model hit max_tokens: the section is cut off, say so loudly."""
+        stop = (getattr(response, 'metadata', None) or {}).get('stop_reason')
+        if stop == 'max_tokens':
+            print(f"  ! {label} was cut off by the output token limit; "
+                  f"consider fewer phases per prompt or --regenerate-story")
 
     def _with_facts(self, prompt: str, note: str = '') -> str:
         """Insert the facts block (and an optional batch note) before the final instruction line."""
@@ -293,13 +306,14 @@ class StoryTeller:
             json.dump(cache_data, f, indent=2)
 
     def _chunk_phase_summaries(
-        self, phase_summaries: List[Dict[str, Any]]
+        self, phase_summaries: List[Dict[str, Any]], size: Optional[int] = None
     ) -> List[List[Dict[str, Any]]]:
         """Chunk phase summaries into batches to avoid oversized prompts."""
 
+        size = size or self.max_phases_per_prompt
         batches: List[List[Dict[str, Any]]] = []
-        for i in range(0, len(phase_summaries), self.max_phases_per_prompt):
-            batches.append(phase_summaries[i : i + self.max_phases_per_prompt])
+        for i in range(0, len(phase_summaries), size):
+            batches.append(phase_summaries[i : i + size])
         return batches
 
     def _generate_with_context_guard(
@@ -404,6 +418,9 @@ class StoryTeller:
             repo_name=repo_name,
             build_prompt_fn=self._build_timeline_prompt,
             initial_max_tokens=3000,
+            # The timeline's output grows with every phase (~150 tokens each);
+            # more than this per prompt runs into the output cap and is cut off.
+            phases_per_prompt=self.timeline_phases_per_prompt,
         )
 
     def _generate_technical_evolution(self, phase_summaries: List[Dict[str, Any]],

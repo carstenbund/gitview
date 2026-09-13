@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from gitview.backends import LLMMessage
-from gitview.backends.anthropic_backend import AnthropicBackend, accepts_temperature
+from gitview.backends.anthropic_backend import (
+    AnthropicBackend, accepts_temperature, response_text, thinking_request_fields,
+)
 
 
 class _Messages:
@@ -60,3 +62,39 @@ def test_unanticipated_rejection_retries_without_and_remembers():
     assert [('temperature' in c) for c in b.client.messages.calls] == [True, False]
     b.generate([LLMMessage("user", "again")])
     assert 'temperature' not in b.client.messages.calls[-1]
+
+
+def test_text_is_collected_from_text_blocks_only():
+    blocks = [SimpleNamespace(type="thinking", thinking="..."),
+              SimpleNamespace(type="text", text="Hello "),
+              SimpleNamespace(type="text", text="world")]
+    assert response_text(blocks) == "Hello world"
+    assert response_text([SimpleNamespace(type="thinking", thinking="x")]) == ""
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("claude-sonnet-5", {"thinking": {"type": "disabled"}}),
+    ("claude-opus-5", {"thinking": {"type": "disabled"}}),
+    ("claude-fable-5-1", {"max_tokens": 8000}),
+    ("claude-sonnet-4-5-20250929", {}),
+    ("claude-haiku-4-5", {}),
+])
+def test_thinking_fields_by_model(model, expected):
+    assert thinking_request_fields(model, 1200) == expected
+
+
+def test_generate_survives_a_leading_thinking_block():
+    class _Thinking(_Messages):
+        def create(self, **kw):
+            self.calls.append(kw)
+            return SimpleNamespace(content=[SimpleNamespace(type="thinking", thinking="hmm"),
+                                            SimpleNamespace(type="text", text="summary")],
+                                   model=kw["model"],
+                                   usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+                                   stop_reason="end_turn")
+    b = AnthropicBackend(model="claude-sonnet-5", api_key="k")
+    b.client = SimpleNamespace(messages=_Thinking(False))
+    out = b.generate([LLMMessage("user", "hi")], max_tokens=1200)
+    assert out.content == "summary"
+    assert b.client.messages.calls[0]["thinking"] == {"type": "disabled"}
+    assert "temperature" not in b.client.messages.calls[0]

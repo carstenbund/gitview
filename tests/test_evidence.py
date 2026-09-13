@@ -214,6 +214,7 @@ def test_storyteller_puts_facts_before_the_instruction_and_stitches_batches(stub
     teller = StoryTeller(backend='anthropic', api_key='x', max_phases_per_prompt=2,
                          facts='**Hard facts about demo**\n- History covered: 2026-01-01 to 2026-01-05',
                          precomputed_sections={'technical_evolution': 'T', 'deletion_story': 'D'})
+    teller.timeline_phases_per_prompt = 2
     stories = teller.generate_global_story(_summary_phases(5), 'demo')
 
     # 5 phases in batches of 2 -> 3 calls per model-written section, no merge call.
