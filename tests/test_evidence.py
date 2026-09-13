@@ -307,6 +307,37 @@ def test_analyze_without_evidence_is_unchanged(tmp_path, stub_llm):
     assert '## Architectural Motifs' not in (tmp_path / 'out' / 'history_story.md').read_text()
 
 
+def test_analyze_regenerate_story_reuses_summaries_and_rebuilds_story(tmp_path, stub_llm):
+    repo = _repo_with_history(tmp_path)
+    out = tmp_path / 'out'
+    first = _run_analyze(repo, out, '--llm-budget', 'balanced')
+    assert first.exit_code == 0, first.output
+    assert stub_llm.calls == 1 + 3
+
+    # Nothing changed: incremental mode stops before the story.
+    again = _run_analyze(repo, out)
+    assert again.exit_code == 0, again.output
+    assert 'No new commits' in again.output
+    assert stub_llm.calls == 1 + 3
+
+    # --regenerate-story keeps the phase summaries (no phase calls) and rebuilds the
+    # three model-written sections, so new directives reach the prompts.
+    redo = _run_analyze(repo, out, '--regenerate-story', '--directives', 'Mention the moon.')
+    assert redo.exit_code == 0, redo.output
+    assert 'Regenerating the story' in redo.output
+    assert stub_llm.calls == 1 + 3 + 3
+    assert any('Mention the moon.' in p and 'Hard facts about' in p for p in stub_llm.prompts[-3:])
+
+
+def test_story_cache_fingerprint_includes_facts(stub_llm):
+    from gitview.storyteller import StoryTeller
+    phases = _summary_phases(2)
+    a = StoryTeller(backend='anthropic', api_key='x', facts='span A')._hash_phases(phases)
+    b = StoryTeller(backend='anthropic', api_key='x', facts='span B')._hash_phases(phases)
+    none = StoryTeller(backend='anthropic', api_key='x')._hash_phases(phases)
+    assert a != b and a != none
+
+
 def test_analyze_hierarchical_uses_evidence_for_clusters(tmp_path, stub_llm):
     repo = _repo_with_history(tmp_path)
     result = _run_analyze(repo, tmp_path / 'out', '--hierarchical', '--llm-budget', 'balanced')

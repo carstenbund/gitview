@@ -176,6 +176,10 @@ EXAMPLES:
 @click.option('--evidence/--no-evidence', default=True,
               help="Build the repository graph and motifs first and use them as evidence "
                    "(fewer and better-grounded LLM calls; default: on)")
+@click.option('--regenerate-story', is_flag=True,
+              help="Rebuild the global narrative from the cached history and phase summaries "
+                   "even when nothing changed (e.g. to apply new --directives or prompt changes); "
+                   "phase summaries are kept, so only the story sections cost model calls")
 def analyze(**kwargs):
     """Analyze git repository and generate narrative history."""
     cmd = AnalyzeCommand(**kwargs)
