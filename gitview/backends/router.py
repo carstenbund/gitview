@@ -6,6 +6,7 @@ from typing import Optional, List
 
 from .base import BaseLLMBackend, LLMMessage
 from .anthropic_backend import AnthropicBackend
+from .claude_cli_backend import ClaudeCLIBackend, claude_cli_available
 from .ollama_backend import OllamaBackend
 from .openai_backend import OpenAIBackend
 
@@ -16,6 +17,7 @@ class LLMBackend(str, Enum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     OLLAMA = "ollama"
+    CLAUDE_CLI = "claude-cli"
 
 
 class LLMRouter:
@@ -26,6 +28,7 @@ class LLMRouter:
         LLMBackend.ANTHROPIC: "claude-sonnet-4-5-20250929",
         LLMBackend.OPENAI: "gpt-4o-mini",
         LLMBackend.OLLAMA: "llama3",
+        LLMBackend.CLAUDE_CLI: "sonnet",   # CLI alias; billed to the Claude plan
     }
 
     def __init__(self, backend: Optional[str] = None, model: Optional[str] = None,
@@ -34,7 +37,7 @@ class LLMRouter:
         Initialize LLM router.
 
         Args:
-            backend: Backend to use ('anthropic', 'openai', 'ollama')
+            backend: Backend to use ('anthropic', 'openai', 'ollama', 'claude-cli')
             model: Model identifier (uses defaults if not specified)
             api_key: API key for the backend (if required)
             **kwargs: Additional backend-specific parameters
@@ -49,6 +52,9 @@ class LLMRouter:
                 self.backend_type = LLMBackend.OPENAI
             elif os.environ.get('ANTHROPIC_API_KEY'):
                 self.backend_type = LLMBackend.ANTHROPIC
+            elif claude_cli_available():
+                # A logged-in Claude Code CLI needs no key; prefer it over Ollama
+                self.backend_type = LLMBackend.CLAUDE_CLI
             else:
                 self.backend_type = LLMBackend.OLLAMA
 
@@ -99,6 +105,12 @@ class LLMRouter:
                 self._backend = OpenAIBackend(
                     model=self.model,
                     api_key=self.api_key,
+                    temperature=temperature
+                )
+
+            elif self.backend_type == LLMBackend.CLAUDE_CLI:
+                self._backend = ClaudeCLIBackend(
+                    model=self.model,
                     temperature=temperature
                 )
 
@@ -154,7 +166,7 @@ def create_router(backend: Optional[str] = None, model: Optional[str] = None,
     Create an LLM router.
 
     Args:
-        backend: Backend to use ('anthropic', 'openai', 'ollama')
+        backend: Backend to use ('anthropic', 'openai', 'ollama', 'claude-cli')
         model: Model identifier
         api_key: API key for the backend
         **kwargs: Additional backend parameters

@@ -97,6 +97,7 @@ LLM BACKENDS:
   OpenAI (default):     export OPENAI_API_KEY="your-key"
   Anthropic Claude:     gitview analyze --backend anthropic
   Local Ollama (free):  gitview analyze --backend ollama --model llama3
+  Claude Code CLI:      gitview analyze --backend claude-cli   # logged-in `claude`, billed to the plan
 
 \b
 EXAMPLES:
@@ -131,7 +132,7 @@ EXAMPLES:
               help="Analyze all branches (local and remote)")
 @click.option('--exclude-branches',
               help="Exclude branches matching patterns (comma-separated)")
-@click.option('--backend', '-b', type=click.Choice(['anthropic', 'openai', 'ollama']),
+@click.option('--backend', '-b', type=click.Choice(['anthropic', 'openai', 'ollama', 'claude-cli']),
               help="LLM backend (auto-detected from env vars if not specified)")
 @click.option('--model', '-m',
               help="Model identifier (uses backend defaults if not specified)")
