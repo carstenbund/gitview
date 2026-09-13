@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from gitview.cli import cli
 from gitview.motifs import Evidence, Thresholds, motif_catalog, run_motifs
+from gitview.motifs.models import MotifContext
 from gitview.structural import StructuralEdge, StructuralNode, StructuralSnapshot
 
 from tests.test_graph import _build, _commit, synthetic_repo  # noqa: F401
@@ -123,6 +124,31 @@ def test_hidden_vs_confirmed_coupling():
     assert hidden == {('a.py', 'b.py'), ('b.py', 'c.py')}
     assert confirmed == {('a.py', 'c.py')}
     assert by['confirmed_coupling'][0].evidence['structural_edges'][0]['relation'] == 'imports'
+
+
+def test_edge_index_is_not_shared_between_snapshots():
+    """A freed snapshot's address must not hand its edges to the next one.
+
+    The edge index used to live in a module-level dict keyed by id(snapshot);
+    CPython reuses addresses, so a later snapshot could inherit the edges of a
+    collected one and hidden coupling would silently disappear.
+    """
+    import gc
+
+    store = _coupled_store()
+    with_edge = _snap(_sha(7), [StructuralEdge('a.py', 'c.py', 'imports')],
+                      ['a.py', 'b.py', 'c.py'], content='with-edge')
+    sid, _ = store.insert_structural_snapshot(with_edge)
+    ctx_first = MotifContext(store, LOOSE, store.structural_observations())
+    assert ctx_first.edges_between(ctx_first.latest, 'a.py', 'c.py')
+
+    del ctx_first, with_edge
+    gc.collect()
+
+    store.delete_structural_snapshot(sid)
+    store.insert_structural_snapshot(_snap(_sha(7), [], ['a.py', 'b.py', 'c.py'], content='no-edge'))
+    ctx_second = MotifContext(store, LOOSE, store.structural_observations())
+    assert ctx_second.edges_between(ctx_second.latest, 'a.py', 'c.py') == []
 
 
 def test_hidden_coupling_needs_both_files_observed():

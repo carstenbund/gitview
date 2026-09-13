@@ -130,23 +130,35 @@ class MotifContext:
             return self.latest
         return self.store.load_structural_snapshot(obs.id)
 
-    @staticmethod
-    def edges_between(snapshot: StructuralSnapshot, a: str, b: str):
-        """Structural edges in either direction between two files."""
-        index = _edge_index(snapshot)
+    @cached_property
+    def latest_edge_index(self) -> Dict[Tuple[str, str], list]:
+        return self.latest.edge_index() if self.latest is not None else {}
+
+    @cached_property
+    def earliest_edge_index(self) -> Dict[Tuple[str, str], list]:
+        if self.earliest is None:
+            return {}
+        if self.earliest is self.latest:
+            return self.latest_edge_index
+        return self.earliest.edge_index()
+
+    def edges_between(self, snapshot: StructuralSnapshot, a: str, b: str):
+        """Structural edges in either direction between two files.
+
+        The index is cached per context and per snapshot *object*, which this
+        context keeps alive. An earlier version cached on ``id(snapshot)`` in a
+        module-level dict: once a snapshot was garbage collected its address
+        could be reused, and a later snapshot silently inherited the freed
+        one's edges.
+        """
+        if snapshot is self.latest:
+            index = self.latest_edge_index
+        elif snapshot is self.earliest:
+            index = self.earliest_edge_index
+        else:
+            index = snapshot.edge_index()
         return index.get((a, b), []) + index.get((b, a), [])
 
     @staticmethod
     def undirected_pairs(snapshot: StructuralSnapshot):
         return {tuple(sorted((e.source, e.target))) for e in snapshot.edges}
-
-
-_INDEX_CACHE: Dict[int, Dict[Tuple[str, str], list]] = {}
-
-
-def _edge_index(snapshot: StructuralSnapshot):
-    key = id(snapshot)
-    if key not in _INDEX_CACHE:
-        _INDEX_CACHE.clear()
-        _INDEX_CACHE[key] = snapshot.edge_index()
-    return _INDEX_CACHE[key]
