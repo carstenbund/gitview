@@ -39,6 +39,15 @@ class GraphCommand(BaseCommand):
             self.print_error(f"Error building graph: {exc}")
             sys.exit(1)
 
+        structural = self.get_option("structural")
+        observation = None
+        if structural:
+            from .observe import run_observation
+            observation = run_observation(
+                self, repo_path, structural, branch=branch,
+                source=self.get_option("source"), refresh=self.get_option("refresh", False),
+                quiet=as_json)
+
         with GraphStore(updater.store_path) as store:
             stats = compute_graph_stats(store, top=top)
 
@@ -51,6 +60,12 @@ class GraphCommand(BaseCommand):
                 'metadata': result.metadata.to_dict(),
                 'stats': stats.to_dict(),
             }
+            if observation is not None:
+                payload['structural'] = {
+                    'inserted': observation.inserted,
+                    'drift': observation.drift,
+                    'observation': observation.observation.to_dict(),
+                }
             print(json.dumps(payload, indent=2))
             return payload
 
@@ -76,6 +91,7 @@ class GraphCommand(BaseCommand):
             ("Pull requests", f"{stats.pull_requests:,}", ""),
             ("Commit/file edges", f"{stats.commit_file_edges:,}", ""),
             ("File coupling edges", f"{stats.file_edges:,}", ""),
+            ("Structural snapshots", f"{stats.structural_snapshots:,}", ""),
         ]
         for label, value, extra in rows:
             self.console.print(f"{label + ':':<22}{value:>8}{extra}")

@@ -8,7 +8,7 @@ regenerable from the primary tables. Nothing here depends on an LLM.
 import json
 import sqlite3
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 from ..extractor import CommitRecord
 from .models import (
@@ -105,9 +105,46 @@ CREATE TABLE IF NOT EXISTS file_edges (
     CHECK (file_a < file_b)
 );
 CREATE INDEX IF NOT EXISTS idx_file_edges_b ON file_edges(file_b);
+
+-- Structural evidence (optional; written by ``gitview observe``). Keyed by path
+-- rather than files(id) so an observation never mutates the historical tables.
+CREATE TABLE IF NOT EXISTS structural_snapshots (
+    id               INTEGER PRIMARY KEY,
+    provider         TEXT NOT NULL,
+    provider_version TEXT NOT NULL,
+    observed_sha     TEXT NOT NULL,
+    observed_at      TEXT NOT NULL,
+    source           TEXT NOT NULL,
+    content_hash     TEXT NOT NULL,
+    node_count       INTEGER NOT NULL,
+    edge_count       INTEGER NOT NULL,
+    UNIQUE (provider, observed_sha, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS structural_nodes (
+    snapshot_id    INTEGER NOT NULL REFERENCES structural_snapshots(id) ON DELETE CASCADE,
+    path           TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    community      TEXT,
+    community_name TEXT,
+    symbols        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (snapshot_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS structural_edges (
+    snapshot_id INTEGER NOT NULL REFERENCES structural_snapshots(id) ON DELETE CASCADE,
+    source      TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    relation    TEXT NOT NULL,
+    weight      REAL NOT NULL,
+    count       INTEGER NOT NULL,
+    PRIMARY KEY (snapshot_id, source, target, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_structural_edges_target ON structural_edges(snapshot_id, target);
 """
 
 _TABLES = (
+    'structural_edges', 'structural_nodes', 'structural_snapshots',
     'file_edges', 'commit_prs', 'pull_requests', 'commit_files', 'files',
     'commit_parents', 'commits', 'authors', 'graph_metadata',
 )
@@ -326,6 +363,8 @@ class GraphStore:
             'pull_requests': q("SELECT COUNT(*) AS n FROM pull_requests").fetchone()['n'],
             'commit_file_edges': q("SELECT COUNT(*) AS n FROM commit_files").fetchone()['n'],
             'file_edges': q("SELECT COUNT(*) AS n FROM file_edges").fetchone()['n'],
+            'structural_snapshots': q(
+                "SELECT COUNT(*) AS n FROM structural_snapshots").fetchone()['n'],
         }
 
     def most_changed(self, limit: int = 10) -> List[FileTouchStats]:
@@ -420,3 +459,160 @@ class GraphStore:
         edges = [(*sorted((r['a'], r['b'])), r['cochange_count'], r['first_seen'], r['last_seen'])
                  for r in rows]
         return sorted(edges)
+
+    # ------------------------------------------------------------------ structural evidence
+
+    def insert_structural_snapshot(self, snapshot) -> Tuple[int, bool]:
+        """Persist a :class:`~gitview.structural.StructuralSnapshot`.
+
+        Returns ``(snapshot_id, inserted)``. An observation with the same
+        provider, commit and content hash is stored once; re-observing an
+        unchanged tree is a no-op.
+        """
+        row = self.conn.execute(
+            "SELECT id FROM structural_snapshots WHERE provider = ? AND observed_sha = ? AND content_hash = ?",
+            (snapshot.provider, snapshot.observed_sha, snapshot.content_hash),
+        ).fetchone()
+        if row is not None:
+            return int(row['id']), False
+
+        cur = self.conn.execute(
+            """INSERT INTO structural_snapshots
+               (provider, provider_version, observed_sha, observed_at, source, content_hash,
+                node_count, edge_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (snapshot.provider, snapshot.provider_version, snapshot.observed_sha,
+             snapshot.observed_at, snapshot.source, snapshot.content_hash,
+             len(snapshot.nodes), len(snapshot.edges)),
+        )
+        sid = int(cur.lastrowid)
+        self.conn.executemany(
+            "INSERT INTO structural_nodes (snapshot_id, path, kind, community, community_name, symbols) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(sid, n.path, n.kind, n.community, n.community_name, n.symbols) for n in snapshot.nodes],
+        )
+        self.conn.executemany(
+            "INSERT INTO structural_edges (snapshot_id, source, target, relation, weight, count) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [(sid, e.source, e.target, e.relation, e.weight, e.count) for e in snapshot.edges],
+        )
+        self.conn.commit()
+        return sid, True
+
+    def structural_observations(self, provider: Optional[str] = None) -> List['StructuralObservation']:
+        """All stored observations, oldest first by history position, then by time."""
+        from ..structural.models import StructuralObservation
+        where = "WHERE s.provider = ?" if provider else ""
+        rows = self.conn.execute(
+            f"""SELECT s.*, c.sequence AS sequence
+                FROM structural_snapshots s
+                LEFT JOIN commits c ON c.hash = s.observed_sha
+                {where}
+                ORDER BY c.sequence IS NULL, c.sequence ASC, s.observed_at ASC, s.id ASC""",
+            (provider,) if provider else (),
+        ).fetchall()
+        return [StructuralObservation(
+            id=int(r['id']), provider=r['provider'], provider_version=r['provider_version'],
+            observed_sha=r['observed_sha'], observed_at=r['observed_at'], source=r['source'],
+            content_hash=r['content_hash'], node_count=int(r['node_count']),
+            edge_count=int(r['edge_count']),
+            sequence=int(r['sequence']) if r['sequence'] is not None else None,
+        ) for r in rows]
+
+    def latest_structural_observation(self, provider: Optional[str] = None):
+        observations = self.structural_observations(provider)
+        return observations[-1] if observations else None
+
+    def structural_nodes(self, snapshot_id: int) -> List['StructuralNode']:
+        from ..structural.models import StructuralNode
+        rows = self.conn.execute(
+            "SELECT path, kind, community, community_name, symbols FROM structural_nodes "
+            "WHERE snapshot_id = ? ORDER BY path", (snapshot_id,)).fetchall()
+        return [StructuralNode(r['path'], r['kind'], r['community'], r['community_name'], int(r['symbols']))
+                for r in rows]
+
+    def structural_edges(self, snapshot_id: int) -> List['StructuralEdge']:
+        from ..structural.models import StructuralEdge
+        rows = self.conn.execute(
+            "SELECT source, target, relation, weight, count FROM structural_edges "
+            "WHERE snapshot_id = ? ORDER BY source, target, relation", (snapshot_id,)).fetchall()
+        return [StructuralEdge(r['source'], r['target'], r['relation'], float(r['weight']), int(r['count']))
+                for r in rows]
+
+    def load_structural_snapshot(self, snapshot_id: int) -> Optional['StructuralSnapshot']:
+        """Rebuild a full :class:`StructuralSnapshot` from the store."""
+        from ..structural.models import StructuralSnapshot
+        r = self.conn.execute(
+            "SELECT * FROM structural_snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+        if r is None:
+            return None
+        return StructuralSnapshot(
+            provider=r['provider'], provider_version=r['provider_version'],
+            observed_sha=r['observed_sha'], observed_at=r['observed_at'], source=r['source'],
+            content_hash=r['content_hash'],
+            nodes=self.structural_nodes(snapshot_id), edges=self.structural_edges(snapshot_id),
+        )
+
+    def delete_structural_snapshot(self, snapshot_id: int) -> None:
+        self.conn.execute("DELETE FROM structural_snapshots WHERE id = ?", (snapshot_id,))
+        self.conn.commit()
+
+    # ------------------------------------------------------------------ history queries used by motifs
+
+    def sequence_of(self, commit_hash: str) -> Optional[int]:
+        row = self.conn.execute("SELECT sequence FROM commits WHERE hash = ?", (commit_hash,)).fetchone()
+        return int(row['sequence']) if row else None
+
+    def cochange_commits(self, path_a: str, path_b: str) -> List[Tuple[int, str, str]]:
+        """Non-merge commits touching both files as ``(sequence, hash, timestamp)``, oldest first."""
+        rows = self.conn.execute(
+            """SELECT c.sequence, c.hash, c.timestamp
+               FROM commits c
+               JOIN commit_files x ON x.commit_id = c.id
+               JOIN commit_files y ON y.commit_id = c.id
+               JOIN files fa ON fa.id = x.file_id
+               JOIN files fb ON fb.id = y.file_id
+               WHERE fa.path = ? AND fb.path = ? AND c.is_merge = 0 AND c.projection_suppressed = 0
+               ORDER BY c.sequence""",
+            (path_a, path_b),
+        ).fetchall()
+        return [(int(r['sequence']), r['hash'], r['timestamp']) for r in rows]
+
+    def file_touches(self, path: str) -> List[Tuple[int, str, str, str]]:
+        """Non-merge commits touching ``path`` as ``(sequence, hash, timestamp, author)``, oldest first."""
+        rows = self.conn.execute(
+            """SELECT c.sequence, c.hash, c.timestamp, a.name AS author
+               FROM commits c
+               JOIN commit_files cf ON cf.commit_id = c.id
+               JOIN files f ON f.id = cf.file_id
+               JOIN authors a ON a.id = c.author_id
+               WHERE f.path = ? AND c.is_merge = 0
+               ORDER BY c.sequence""",
+            (path,),
+        ).fetchall()
+        return [(int(r['sequence']), r['hash'], r['timestamp'], r['author']) for r in rows]
+
+    def cochange_neighbours(self, path: str) -> List[Tuple[str, int]]:
+        """Files co-changed with ``path`` as ``(other_path, cochange_count)``, strongest first."""
+        rows = self.conn.execute(
+            """SELECT CASE WHEN fa.path = ? THEN fb.path ELSE fa.path END AS other, e.cochange_count
+               FROM file_edges e JOIN files fa ON fa.id = e.file_a JOIN files fb ON fb.id = e.file_b
+               WHERE fa.path = ? OR fb.path = ?
+               ORDER BY e.cochange_count DESC, other""",
+            (path, path, path),
+        ).fetchall()
+        return [(r['other'], int(r['cochange_count'])) for r in rows]
+
+    def touch_counts(self) -> Dict[str, int]:
+        rows = self.conn.execute("SELECT path, touch_count FROM files").fetchall()
+        return {r['path']: int(r['touch_count']) for r in rows}
+
+    def commit_span(self) -> Tuple[int, int]:
+        row = self.conn.execute(
+            "SELECT COALESCE(MIN(sequence), 0) AS lo, COALESCE(MAX(sequence), 0) AS hi FROM commits").fetchone()
+        return int(row['lo']), int(row['hi'])
+
+    def commit_info(self, sequence: int) -> Optional[Tuple[str, str, str]]:
+        row = self.conn.execute(
+            "SELECT hash, timestamp, subject FROM commits WHERE sequence = ?", (sequence,)).fetchone()
+        return (row['hash'], row['timestamp'], row['subject']) if row else None

@@ -16,6 +16,8 @@ from .compare_branches import CompareBranchesCommand
 from .worklog import WorklogCommand
 from .brief import BriefCommand
 from .graph import GraphCommand
+from .observe import ObserveCommand
+from .motifs import MotifsCommand
 
 __all__ = [
     'BaseCommand',
@@ -30,4 +32,6 @@ __all__ = [
     'WorklogCommand',
     'BriefCommand',
     'GraphCommand',
+    'ObserveCommand',
+    'MotifsCommand',
 ]

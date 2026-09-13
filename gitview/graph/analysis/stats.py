@@ -15,6 +15,7 @@ def compute_graph_stats(store: GraphStore, *, top: int = 10, min_cochanges: int 
         pull_requests=counts['pull_requests'],
         commit_file_edges=counts['commit_file_edges'],
         file_edges=counts['file_edges'],
+        structural_snapshots=counts.get('structural_snapshots', 0),
         most_changed=store.most_changed(top),
         most_coupled=store.most_coupled(top, min_cochanges=min_cochanges),
         most_connected=store.most_connected(top),
