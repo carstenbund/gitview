@@ -455,6 +455,13 @@ class AnalyzeCommand(BaseCommand):
             router = LLMRouter(backend=backend, model=model, api_key=api_key, ollama_url=ollama_url)
             self.print_info(f"Backend: {router.backend_type.value}")
             self.print_info(f"Model: {router.model}\n")
+            # Fail before extracting and chunking, not at the first model call
+            # (a missing key used to surface only after minutes of work).
+            try:
+                router._get_backend()
+            except ValueError as exc:
+                self.print_error(f"Error: {exc}")
+                sys.exit(1)
         else:
             self.print_warning("Skipping LLM summarization\n")
 
@@ -482,8 +489,11 @@ class AnalyzeCommand(BaseCommand):
         cached_records = None
         cached_phases = None
         auto_incremental = False
+        regenerate_story = self.get_option('regenerate_story', False)
+        if regenerate_story:
+            self.print_info("Regenerating the story from cached history and phase summaries\n")
 
-        if not incremental and not since_commit and not since_date:
+        if not incremental and not since_commit and not since_date and not regenerate_story:
             cached_records, cached_phases = self._load_cached_analysis(output)
             if cached_records and cached_phases:
                 previous_analysis = OutputWriter.load_previous_analysis(output)
@@ -1133,7 +1143,9 @@ class AnalyzeCommand(BaseCommand):
 
             with self.create_progress() as progress:
                 task = progress.add_task("Generating story...", total=None)
-                stories = storyteller.generate_global_story(phases, repo_name, cache_dir=cache_dir)
+                stories = storyteller.generate_global_story(
+                    phases, repo_name, cache_dir=cache_dir,
+                    force=self.get_option('regenerate_story', False))
                 progress.update(task, completed=True)
 
             self.print_success("Generated global narrative\n")

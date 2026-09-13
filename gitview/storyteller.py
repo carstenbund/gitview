@@ -52,7 +52,8 @@ class StoryTeller:
 
     def generate_global_story(self, phases: List[Phase],
                              repo_name: Optional[str] = None,
-                             cache_dir: Optional[str] = None) -> Dict[str, str]:
+                             cache_dir: Optional[str] = None,
+                             force: bool = False) -> Dict[str, str]:
         """
         Generate comprehensive repository story from phases.
 
@@ -73,8 +74,8 @@ class StoryTeller:
         if any(p.summary is None for p in phases):
             raise ValueError("All phases must have summaries before generating global story")
 
-        # Try to load cached story if available
-        if cache_dir:
+        # Try to load cached story if available (``force`` skips the lookup but still saves)
+        if cache_dir and not force:
             cached_story = self._load_cached_story(phases, cache_dir)
             if cached_story:
                 print("✓ Using cached story (phases unchanged since last generation)")
@@ -238,6 +239,8 @@ class StoryTeller:
             phase_fingerprint.append({'prompt': {'directives': self.directives,
                                                  'critical': self.critical_mode,
                                                  'todo': self.todo_content}})
+        if self.facts:
+            phase_fingerprint.append({'facts': self.facts})
 
         # Convert to JSON and hash
         fingerprint_str = json.dumps(phase_fingerprint, sort_keys=True)
