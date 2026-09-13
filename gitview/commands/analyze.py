@@ -455,6 +455,13 @@ class AnalyzeCommand(BaseCommand):
             router = LLMRouter(backend=backend, model=model, api_key=api_key, ollama_url=ollama_url)
             self.print_info(f"Backend: {router.backend_type.value}")
             self.print_info(f"Model: {router.model}\n")
+            # Fail before extracting and chunking, not at the first model call
+            # (a missing key used to surface only after minutes of work).
+            try:
+                router._get_backend()
+            except ValueError as exc:
+                self.print_error(f"Error: {exc}")
+                sys.exit(1)
         else:
             self.print_warning("Skipping LLM summarization\n")
 
