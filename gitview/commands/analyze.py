@@ -596,8 +596,30 @@ class AnalyzeCommand(BaseCommand):
             self.print_success(f"Wrote timeline to {timeline_file}\n")
             return
 
-        # Show cost estimate
-        self._show_cost_estimate(records, backend, model, api_key)
+        # Step 2.5: Deterministic evidence (graph + motifs) — decides which phases
+        # need a model call at all and grounds the calls that are made.
+        ledger = None
+        llm_budget = self.get_option('llm_budget', 'balanced')
+        if self.get_option('evidence', True):
+            self.console.print("[bold]Step 2.5: Collecting repository evidence (no LLM)...[/bold]")
+            ledger = self._build_ledger(records, branch, output_path,
+                                        partial=bool(max_commits or since_commit or since_date))
+
+        # Show cost estimate (after evidence, so it counts only the calls that will be made)
+        pending = [p for p in phases if p.summary is None]
+        if ledger is not None:
+            from ..evidence import llm_threshold
+            threshold = llm_threshold(llm_budget)
+            llm_phases = sum(1 for p in pending if ledger.phase_evidence(p).score >= threshold)
+            story_sections = 3
+        else:
+            llm_phases, story_sections = len(pending), 5
+        self._show_cost_estimate(records, backend, model, api_key,
+                                 num_phases=llm_phases, story_sections=story_sections,
+                                 skipped_phases=len(pending) - llm_phases)
+
+        from ..backends.router import LLMRouter
+        LLMRouter.reset_call_count()
 
         # Step 3: Summarize phases
         self.console.print("[bold]Step 3: Summarizing phases with LLM...[/bold]")
@@ -605,7 +627,8 @@ class AnalyzeCommand(BaseCommand):
         use_hierarchical = summarization_strategy == 'hierarchical'
         phases = self._summarize_phases(
             phases, previous_analysis, use_hierarchical,
-            backend, model, api_key, ollama_url, critical, directives, str(phases_dir)
+            backend, model, api_key, ollama_url, critical, directives, str(phases_dir),
+            ledger=ledger, llm_budget=llm_budget,
         )
 
         # Step 4: Track storylines with StorylineTracker (NEW - Phase 1 integration)
@@ -616,7 +639,7 @@ class AnalyzeCommand(BaseCommand):
         self.console.print("[bold]Step 5: Generating global narrative...[/bold]")
         stories = self._generate_stories(
             phases, use_hierarchical, backend, model, api_key, ollama_url,
-            critical, directives, storyline_tracker, repo_name, output
+            critical, directives, storyline_tracker, repo_name, output, ledger=ledger
         )
 
         # Step 6: Write output
@@ -626,6 +649,7 @@ class AnalyzeCommand(BaseCommand):
         # Success summary
         self.print_success("Analysis complete!\n")
         self.console.print(f"Analyzed {len(records)} commits across {len(phases)} phases")
+        self._report_llm_usage(phases, LLMRouter.total_calls)
         self.console.print(f"Output written to: {output_path.resolve()}\n")
 
     def _load_cached_analysis(self, output_dir: str):
@@ -770,7 +794,8 @@ class AnalyzeCommand(BaseCommand):
 
         self.console.print(table)
 
-    def _show_cost_estimate(self, records, backend, model, api_key):
+    def _show_cost_estimate(self, records, backend, model, api_key, num_phases=None,
+                            story_sections=5, skipped_phases=0):
         """Show estimated LLM cost before analysis."""
         avg_msg_length = sum(len(r.commit_message) for r in records) // max(1, len(records))
 
@@ -780,8 +805,13 @@ class AnalyzeCommand(BaseCommand):
             commit_count=len(records),
             avg_msg_length=avg_msg_length,
             backend=router_for_estimate.backend_type.value,
-            model=router_for_estimate.model
+            model=router_for_estimate.model,
+            num_phases=num_phases,
+            story_sections=story_sections,
         )
+        if skipped_phases:
+            self.print_info(f"Evidence covers {skipped_phases} phase(s) without a model call; "
+                            f"{estimate['num_phases']} phase(s) still go to the LLM")
 
         if estimate['cost_usd'] > 0:
             self.console.print(f"\n[bold]Cost Estimate:[/bold]")
@@ -798,10 +828,13 @@ class AnalyzeCommand(BaseCommand):
                 self.console.print("  • Limit commits: --max-commits 500")
             self.console.print()
 
-    def _estimate_analysis_cost(self, commit_count: int, avg_msg_length: int, backend: str, model: str) -> dict:
+    def _estimate_analysis_cost(self, commit_count: int, avg_msg_length: int, backend: str, model: str,
+                                num_phases: Optional[int] = None, story_sections: int = 5) -> dict:
         """Estimate LLM API cost before analysis."""
         avg_commits_per_phase = 40
-        num_phases = max(1, commit_count // avg_commits_per_phase)
+        if num_phases is None:
+            num_phases = max(1, commit_count // avg_commits_per_phase)
+        num_phases = max(1, num_phases)
 
         tokens_per_commit = 50 + (avg_msg_length // 4)
         commits_shown_per_phase = min(20, commit_count // num_phases)
@@ -812,8 +845,8 @@ class AnalyzeCommand(BaseCommand):
         phase_summarization_input = num_phases * input_tokens_per_phase
         phase_summarization_output = num_phases * output_tokens_per_phase
 
-        story_input_tokens = num_phases * 400 + 2000
-        story_output_tokens = 10000
+        story_input_tokens = (num_phases * 400 + 2000) * story_sections // 5
+        story_output_tokens = 2000 * story_sections
 
         total_input_tokens = phase_summarization_input + story_input_tokens
         total_output_tokens = phase_summarization_output + story_output_tokens
@@ -844,16 +877,24 @@ class AnalyzeCommand(BaseCommand):
         }
 
     def _summarize_phases(self, phases, previous_analysis, use_hierarchical,
-                          backend, model, api_key, ollama_url, critical, directives, phases_dir):
-        """Summarize phases with LLM."""
+                          backend, model, api_key, ollama_url, critical, directives, phases_dir,
+                          ledger=None, llm_budget='balanced'):
+        """Summarize phases, spending the LLM only where the evidence says it is needed."""
+        from ..evidence import llm_threshold
+        threshold = llm_threshold(llm_budget) if ledger is not None else float('inf')
+        prior_slugs = set()
         if use_hierarchical:
             self.print_info("Using hierarchical summarization strategy")
-            self.print_warning("Note: This makes more API calls but preserves more details\n")
+            if ledger is None or llm_budget == 'full':
+                self.print_warning("Note: This makes more API calls but preserves more details\n")
+            else:
+                self.print_info("Cluster summaries come from evidence; one LLM call per narrated phase\n")
             summarizer = HierarchicalPhaseSummarizer(
                 backend=backend,
                 model=model,
                 api_key=api_key,
                 ollama_url=ollama_url,
+                cluster_llm=(ledger is None or llm_budget == 'full'),
             )
             phases_to_summarize = [p for p in phases if p.summary is None or
                                    not getattr(p, 'metadata', {}).get('hierarchical_summary')]
@@ -880,20 +921,36 @@ class AnalyzeCommand(BaseCommand):
             for i, phase in enumerate(phases):
                 progress.update(task, description=f"Processing phase {i+1}/{len(phases)}...")
 
+                evidence = ledger.phase_evidence(phase) if ledger is not None else None
                 if phase.summary is None:
-                    if use_hierarchical:
+                    if not hasattr(phase, 'metadata') or phase.metadata is None:
+                        phase.metadata = {}
+                    if evidence is not None and evidence.score < threshold:
+                        phase.summary = evidence.render_summary(prior_slugs)
+                        phase.metadata['summary_source'] = 'evidence'
+                        phase.metadata['evidence'] = evidence.to_dict()
+                        if use_hierarchical:
+                            result = evidence.hierarchical_result(phase.summary, phase.loc_delta_percent)
+                            phase.metadata['hierarchical_summary'] = result
+                            summarizer._save_phase_summary(phase, result, phases_dir)
+                        else:
+                            summarizer._save_phase_with_summary(phase, phases_dir)
+                    elif use_hierarchical:
                         result = summarizer.summarize_phase(phase)
                         phase.summary = result['full_summary']
-                        if not hasattr(phase, 'metadata'):
-                            phase.metadata = {}
                         phase.metadata['hierarchical_summary'] = result
+                        phase.metadata['summary_source'] = 'llm'
                         summarizer._save_phase_summary(phase, result, phases_dir)
                     else:
                         context = summarizer._build_context(previous_summaries)
-                        summary = summarizer.summarize_phase(phase, context)
+                        block = evidence.prompt_block() if evidence is not None else None
+                        summary = summarizer.summarize_phase(phase, context, evidence=block)
                         phase.summary = summary
+                        phase.metadata['summary_source'] = 'llm'
                         summarizer._save_phase_with_summary(phase, phases_dir)
                     progress.update(task, advance=1)
+                if evidence is not None:
+                    prior_slugs.update(slug for slug, _, _ in evidence.storylines())
 
                 previous_summaries.append({
                     'phase_number': phase.phase_number,
@@ -902,11 +959,43 @@ class AnalyzeCommand(BaseCommand):
                 })
 
         if len(phases_to_summarize) > 0:
-            self.print_success(f"Summarized {len(phases_to_summarize)} phase(s)\n")
+            from_evidence = sum(
+                1 for p in phases_to_summarize
+                if getattr(p, 'metadata', None) and p.metadata.get('summary_source') == 'evidence')
+            detail = (f" ({from_evidence} from evidence, {len(phases_to_summarize) - from_evidence} with the LLM)"
+                      if ledger is not None else '')
+            self.print_success(f"Summarized {len(phases_to_summarize)} phase(s){detail}\n")
         else:
             self.print_success("All phases already summarized\n")
 
         return phases
+
+    def _build_ledger(self, records, branch, output_path, *, partial: bool):
+        """Build the evidence ledger; a partial history gets its own store so the
+        shared .gitview/graph.sqlite is never built from a truncated log."""
+        from ..evidence import EvidenceLedger
+        store_path = (Path(output_path) / "evidence.sqlite") if partial else None
+        try:
+            ledger = EvidenceLedger(self._repo_path, records, branch=branch, store_path=store_path)
+        except Exception as exc:
+            self.print_warning(f"Warning: could not build repository evidence ({exc}); "
+                               f"falling back to LLM-only summarization\n")
+            return None
+        report = ledger.report
+        skipped = len(report.skipped)
+        self.print_success(
+            f"Graph {ledger.sync.action} ({ledger.stats.commits:,} commits, {ledger.stats.files:,} files, "
+            f"{ledger.stats.file_edges:,} coupling edges); {len(report.findings)} motif finding(s)"
+            + (f", {skipped} motif(s) need a structural observation" if skipped else '') + "\n")
+        return ledger
+
+    def _report_llm_usage(self, phases, total_calls: int) -> None:
+        from_evidence = sum(
+            1 for p in phases
+            if getattr(p, 'metadata', None) and p.metadata.get('summary_source') == 'evidence')
+        self.console.print(f"LLM calls this run: {total_calls}"
+                           + (f"  (phases written from evidence: {from_evidence}/{len(phases)})"
+                              if from_evidence else ''))
 
     def _track_storylines(self, phases: List[Phase], phases_dir: str, github_token: Optional[str]) -> StorylineTracker:
         """Track storylines using multi-signal detection.
@@ -968,10 +1057,19 @@ class AnalyzeCommand(BaseCommand):
         return tracker
 
     def _generate_stories(self, phases, use_hierarchical, backend, model, api_key, ollama_url,
-                          critical, directives, storyline_tracker, repo_name, cache_dir):
+                          critical, directives, storyline_tracker, repo_name, cache_dir, ledger=None):
         """Generate global narrative stories."""
         # Get storylines for narrative continuity
         storylines = storyline_tracker.get_storylines_for_prompt(limit=10)
+        precomputed = {}
+        if ledger is not None:
+            precomputed = {
+                'technical_evolution': ledger.technical_evolution(phases),
+                'deletion_story': ledger.deletion_story(phases),
+            }
+            architecture = ledger.architecture_section()
+            if architecture:
+                precomputed['architecture'] = architecture
 
         if use_hierarchical:
             storyteller = HierarchicalStoryTeller(
@@ -993,6 +1091,7 @@ class AnalyzeCommand(BaseCommand):
                 'deletion_story': '',
                 'full_narrative': timeline,
             }
+            stories.update(precomputed)
 
             self.print_success("Generated hierarchical timeline\n")
         else:
@@ -1004,7 +1103,8 @@ class AnalyzeCommand(BaseCommand):
                 todo_content=self._todo_content,
                 critical_mode=critical,
                 directives=directives,
-                storylines=storylines
+                storylines=storylines,
+                precomputed_sections=precomputed,
             )
 
             with self.create_progress() as progress:

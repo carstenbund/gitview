@@ -129,13 +129,15 @@ class PhaseSummarizer:
         self.critical_mode = critical_mode
         self.directives = directives
 
-    def summarize_phase(self, phase: Phase, context: Optional[str] = None) -> str:
+    def summarize_phase(self, phase: Phase, context: Optional[str] = None,
+                        evidence: Optional[str] = None) -> str:
         """
         Generate a narrative summary for a single phase.
 
         Args:
             phase: Phase object to summarize
             context: Optional context from previous phases
+            evidence: Optional deterministic evidence block (see ``gitview.evidence``)
 
         Returns:
             Narrative summary string
@@ -144,7 +146,7 @@ class PhaseSummarizer:
         phase_data = self._prepare_phase_data(phase)
 
         # Build prompt
-        prompt = self._build_phase_prompt(phase_data, context)
+        prompt = self._build_phase_prompt(phase_data, context, evidence)
 
         # Call LLM backend with guard against context length limits
         messages = [LLMMessage(role="user", content=prompt)]
@@ -358,7 +360,8 @@ class PhaseSummarizer:
         }
 
     def _build_phase_prompt(self, phase_data: Dict[str, Any],
-                           context: Optional[str] = None) -> str:
+                           context: Optional[str] = None,
+                           evidence: Optional[str] = None) -> str:
         """Build prompt for phase summarization."""
         if self.critical_mode:
             prompt = f"""You are conducting a critical examination of a phase in a git repository's history.
@@ -444,6 +447,9 @@ The following PR descriptions provide context about why these changes were made:
 The following feedback was provided during code reviews:
 {json.dumps(phase_data['review_feedback'], indent=2)}
 """
+
+        if evidence:
+            prompt += f"\n{evidence}\n"
 
         if context:
             prompt += f"\n**Context from Previous Phases:**\n{context}\n"
