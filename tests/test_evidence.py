@@ -38,6 +38,7 @@ def _records(n_routine=6, feature=True):
         ]
     if feature:
         records[n_routine + 2].is_refactor = True
+        records[n_routine + 2].insertions, records[n_routine + 2].deletions = 160, 150
     for i, r in enumerate(records):
         r.commit_subject = f"{'docs: tweak readme' if r.files_stats.get('README.md') else 'feat: core work'} {i}"
         r.commit_message = r.commit_subject
@@ -96,8 +97,21 @@ def test_routine_phase_scores_low_and_feature_phase_high(tmp_path, synthetic_rep
     assert ev_r.score < LLM_BUDGETS['balanced']
     assert ev_f.score >= LLM_BUDGETS['balanced']
     assert '1 significant commit(s)' in ev_f.reasons
+    assert ev_f.active_motifs == []          # repeated co-change is context, not an event
     assert ev_f.top_files[0][0] in {'src/core.py', 'src/api.py'}
     assert ev_f.coupling and ev_f.coupling[0][:2] == ('src/api.py', 'src/core.py')
+
+
+def test_tiny_refactors_and_timeless_motifs_are_not_signals(tmp_path, synthetic_repo):
+    records = _records()
+    # A 4-line "refactor" (the extractor flags submodule-pointer bumps this way) must not count.
+    records[2].is_refactor = True
+    records[2].insertions, records[2].deletions = 2, 2
+    routine, _ = _phases(records, chunk_size=6)
+    ev = _ledger(tmp_path, records, synthetic_repo).phase_evidence(routine)
+    assert ev.significant_commits == 0
+    assert ev.active_motifs == []
+    assert ev.score < LLM_BUDGETS['balanced']
 
 
 def test_router_counts_calls(stub_llm):
@@ -184,12 +198,14 @@ def _repo_with_history(tmp_path):
         'src/core.py': 'def b():\n    return 3\n' * 80, 'src/api.py': 'import core  # v3\n' * 80})
     _write_and_commit(repo, "feat: util", **{'src/util.py': 'x = 1\n' * 60,
                                              'src/core.py': 'def b():\n    return 4\n' * 80})
+    # A >1000-line addition: the one commit that makes the second phase worth narrating.
+    _write_and_commit(repo, "feat: generated client", **{'src/client.py': 'pass\n' * 1200})
     return repo
 
 
 def _run_analyze(repo, out, *extra):
     return CliRunner().invoke(cli, ['analyze', '--repo', str(repo), '--output', str(out),
-                                    '--backend', 'anthropic', '--strategy', 'fixed', '--chunk-size', '5',
+                                    '--backend', 'anthropic', '--strategy', 'fixed', '--chunk-size', '6',
                                     *extra])
 
 
@@ -198,7 +214,8 @@ def test_analyze_balanced_budget_spends_fewer_calls(tmp_path, stub_llm):
     result = _run_analyze(repo, tmp_path / 'out', '--llm-budget', 'balanced')
     assert result.exit_code == 0, result.output
 
-    # 2 phases; the routine docs phase is written from evidence, the feature phase by the model.
+    # 2 phases (6 docs commits, then 5 feature commits incl. a >1000-line addition);
+    # the routine docs phase is written from evidence, the feature phase by the model.
     # Story: 5 sections minus the two pre-rendered ones = 3 calls.
     assert stub_llm.calls == 1 + 3
     assert 'from evidence' in result.output

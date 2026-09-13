@@ -94,7 +94,8 @@ class PhaseEvidence:
     top_files: List[Tuple[str, int]]                       # (path, commits in phase)
     clusters: List[ClusterEvidence]
     coupling: List[Tuple[str, str, int, int]]              # (a, b, in-phase co-changes, all-time)
-    motifs: List[MotifFinding]
+    motifs: List[MotifFinding]                             # context: motifs on this phase's files
+    active_motifs: List[MotifFinding]                      # signal: motifs whose evidence occurs in this phase
     significant_commits: int
     pr_narratives: int
     score: float
@@ -213,6 +214,7 @@ class PhaseEvidence:
             'phase_number': self.phase_number, 'score': round(self.score, 3), 'reasons': self.reasons,
             'top_files': self.top_files, 'clusters': [c.to_dict() for c in self.clusters],
             'coupling': self.coupling, 'motifs': [m.to_dict() for m in self.motifs],
+            'active_motifs': [m.key for m in self.active_motifs],
             'significant_commits': self.significant_commits, 'pr_narratives': self.pr_narratives,
         }
 
@@ -284,15 +286,17 @@ class EvidenceLedger:
             if commits else []
 
         motifs = self._motifs_for(touched, top_set, phase.start_date[:10], phase.end_date[:10])
-        significant = sum(1 for c in commits if c.is_large_deletion or c.is_large_addition or c.is_refactor)
+        phase_hashes = {c.commit_hash for c in commits}
+        active = [m for m in motifs if _active_in_phase(m, phase_hashes, phase.start_date[:10], phase.end_date[:10])]
+        significant = sum(1 for c in commits if _is_significant(c))
         pr_narratives = sum(1 for c in commits if c.has_github_context() and c.get_pr_title())
 
-        score, reasons = _score(phase, clusters, motifs, significant, pr_narratives)
+        score, reasons = _score(phase, commits, clusters, active, significant, pr_narratives)
         evidence = PhaseEvidence(
             phase_number=phase.phase_number, start_date=phase.start_date[:10], end_date=phase.end_date[:10],
             commit_count=phase.commit_count, authors=list(phase.authors), primary_author=phase.primary_author,
             loc_delta=phase.loc_delta, insertions=phase.total_insertions, deletions=phase.total_deletions,
-            top_files=top_files, clusters=clusters, coupling=coupling, motifs=motifs,
+            top_files=top_files, clusters=clusters, coupling=coupling, motifs=motifs, active_motifs=active,
             significant_commits=significant, pr_narratives=pr_narratives, score=score, reasons=reasons,
         )
         self._cache[key] = evidence
@@ -449,15 +453,50 @@ def cluster_summary(cluster: CommitCluster) -> str:
 
 # --------------------------------------------------------------------------- helpers
 
-def _score(phase: Phase, clusters: List[ClusterEvidence], motifs: List[MotifFinding],
-           significant: int, pr_narratives: int) -> Tuple[float, List[str]]:
+#: A refactor-flagged commit needs this much churn before it counts as significant;
+#: the extractor's heuristic also flags 4-line submodule-pointer bumps.
+SIGNIFICANT_REFACTOR_CHURN = 200
+#: Absolute size that makes a phase worth narrating on its own.
+BIG_PHASE_CHURN = 3000
+BIG_PHASE_COMMITS = 15
+
+
+def _is_significant(c: CommitRecord) -> bool:
+    if c.is_large_addition or c.is_large_deletion:
+        return True
+    return bool(c.is_refactor) and (c.insertions + c.deletions) >= SIGNIFICANT_REFACTOR_CHURN
+
+
+#: Motifs that describe an *event* rather than a standing pattern. Only these can
+#: make a phase worth narrating; repeated co-change or a stable interface being
+#: present in a phase is business as usual and stays context.
+EVENT_MOTIFS = {'ownership_transition', 'emerging_dependency', 'architectural_split', 'centrality_growth'}
+
+
+def _active_in_phase(finding: MotifFinding, phase_hashes: Set[str], start: str, end: str) -> bool:
+    """True when the motif's event lands inside this phase."""
+    if finding.motif not in EVENT_MOTIFS:
+        return False
+    ev = finding.evidence
+    handover = ev.get('handover_date')
+    if handover:
+        return start <= handover[:10] <= end
+    for key in ('first_cochange', 'observed_to', 'handover_commit'):
+        sha = ev.get(key)
+        if sha and sha in phase_hashes:
+            return True
+    return False
+
+
+def _score(phase: Phase, commits: List[CommitRecord], clusters: List[ClusterEvidence],
+           active_motifs: List[MotifFinding], significant: int, pr_narratives: int) -> Tuple[float, List[str]]:
     score, reasons = 0.0, []
     if significant:
         score += 0.35
         reasons.append(f"{significant} significant commit(s)")
-    if motifs:
-        score += 0.25
-        reasons.append(f"{len(motifs)} motif(s)")
+    if active_motifs:
+        score += 0.20
+        reasons.append(f"{len(active_motifs)} active motif(s)")
     if pr_narratives:
         score += 0.15
         reasons.append(f"{pr_narratives} PR narrative(s)")
@@ -465,9 +504,10 @@ def _score(phase: Phase, clusters: List[ClusterEvidence], motifs: List[MotifFind
     if len({c.type for c in rich}) >= 2:
         score += 0.15
         reasons.append("mixed activity")
-    if phase.commit_count >= 10 or abs(phase.loc_delta_percent) >= 10:
+    churn = sum(c.insertions + c.deletions for c in commits)
+    if len(commits) >= BIG_PHASE_COMMITS or churn >= BIG_PHASE_CHURN:
         score += 0.10
-        reasons.append("large phase")
+        reasons.append(f"large phase ({churn:,} lines)")
     if phase.readme_changed:
         score += 0.05
     return min(score, 1.0), reasons
