@@ -25,7 +25,7 @@ class LLMRouter:
 
     # Default models for each backend, be aware of cost
     DEFAULT_MODELS = {
-        LLMBackend.ANTHROPIC: "claude-sonnet-4-5-20250929",
+        LLMBackend.ANTHROPIC: "claude-sonnet-5",
         LLMBackend.OPENAI: "gpt-4o-mini",
         LLMBackend.OLLAMA: "llama3",
         LLMBackend.CLAUDE_CLI: "sonnet",   # CLI alias; billed to the Claude plan

@@ -188,7 +188,7 @@ WORKLOG_HELP = """Generate a work log from GitHub commit history across all bran
 Fetches every commit visible on any branch within the given date range,
 deduplicates by SHA (so a commit merged to multiple branches is counted once),
 resolves the best associated PR for each commit via GraphQL, and renders the
-result as Markdown (default) or CSV — suitable for billing/work reports.
+result as Markdown (default) or CSV - suitable for billing/work reports.
 
 \b
 REPOSITORY:
@@ -246,7 +246,7 @@ BRIEF_HELP = """Generate a compact, agent-oriented project history digest (no LL
 Compiles commit stats, a phase timeline, and multi-signal storylines (PR
 labels/titles, file clusters, commit patterns, and this project's own
 'Storyline: [status:category] Title' commit trailer) into ONE markdown
-file — meant to be committed and read once per session instead of an
+file - meant to be committed and read once per session instead of an
 agent re-deriving project history from git log / exploration each time.
 
 \b
@@ -286,7 +286,7 @@ def brief(**kwargs):
 GRAPH_HELP = """Build or update the persistent repository graph (no LLM).
 
 \b
-Stores commits, files, authors, PRs, commit→file edges and a repository-wide
+Stores commits, files, authors, PRs, commit->file edges and a repository-wide
 file co-change projection in <repo>/.gitview/graph.sqlite. Incremental: on a
 later run only commits after the stored head are added; a rewritten history
 (rebase, reset, force push) triggers a full rebuild automatically.
@@ -318,7 +318,7 @@ EXAMPLES:
 @click.option('--json', 'json_output', is_flag=True,
               help="Print results as JSON instead of tables")
 @click.option('--max-projection-files', type=int, default=None,
-              help="Commits touching more files than this get no file↔file edges (default: 100)")
+              help="Commits touching more files than this get no file<->file edges (default: 100)")
 @click.option('--structural', metavar='PROVIDER', default=None,
               help="Also store a structural observation from PROVIDER (e.g. graphify)")
 @click.option('--source', default=None,
@@ -336,7 +336,7 @@ OBSERVE_HELP = """Store a structural observation as optional graph evidence (no 
 \b
 GitView's own graph is built from git history. A structural provider (an
 external code analyser) can additionally describe the *present* shape of the
-code — which file imports, calls or inherits from which — at one commit.
+code - which file imports, calls or inherits from which - at one commit.
 GitView translates that into its own neutral model and stores it with
 provenance (provider, version, observed commit, content hash) in
 <repo>/.gitview/graph.sqlite next to the historical evidence.
