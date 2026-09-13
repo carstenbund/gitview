@@ -236,16 +236,25 @@ def _norm_path(value: Any) -> str:
 
 
 def _root_marker(graph_file: Path) -> Optional[Path]:
-    """The directory recorded in ``.graphify_root`` next to ``graph_file``, if any."""
+    """The directory recorded in ``.graphify_root`` next to ``graph_file``, if any.
+
+    Graphify writes the scan root as typed on its command line, so the marker
+    usually reads ``.``. A relative value is resolved against the directory
+    that contains the output dir (``<root>/graphify-out/graph.json`` → ``<root>``),
+    never against the current working directory.
+    """
     marker = graph_file.parent / ROOT_MARKER_FILE
     try:
-        text = marker.read_text(encoding='utf-8').strip()
+        text = marker.read_text(encoding='utf-8-sig').strip()
     except OSError:
         return None
     if not text:
         return None
     root = Path(text)
-    return root.resolve() if root.is_dir() else None
+    if not root.is_absolute():
+        root = graph_file.parent.parent / root
+    root = root.resolve()
+    return root if root.is_dir() else None
 
 
 def _path_prefix(repo: Path, graph_root: Optional[Path]) -> str:

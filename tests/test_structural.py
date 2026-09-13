@@ -185,6 +185,23 @@ def test_provider_rebases_explicit_source_via_root_marker(tmp_path):
     assert snap.source.endswith('[api/]')
 
 
+def test_root_marker_relative_dot_resolves_against_output_parent(tmp_path, monkeypatch):
+    # Graphify writes the scan root as typed (`graphify update .` → "."); it must
+    # resolve to the graph's own root, not to wherever `gitview observe` is run from.
+    super_root = tmp_path / 'super'
+    graph = _write_graph(super_root, SUPERPROJECT_JSON)
+    (graph.parent / '.graphify_root').write_text('.')
+    module = super_root / 'api'
+    module.mkdir()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    provider = GraphifyProvider(executable='definitely-not-installed')
+    snap = provider.snapshot(module, 'c' * 40, source=graph)
+    assert snap.paths() == {'app.py', 'models.py'}
+    assert snap.source.endswith('[api/]')
+
+
 def test_provider_finds_superproject_graph_for_submodule(tmp_path, monkeypatch):
     super_root = tmp_path / 'super'
     _write_graph(super_root, SUPERPROJECT_JSON)
