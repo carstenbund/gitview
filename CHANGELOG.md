@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to GitView. The published PyPI releases stop at `0.1.3`
-(2025-12-06); everything below `0.1.3` in this file has been developed since
-and is released together as **0.7.1**.
+All notable changes to GitView. The last published PyPI release is `0.1.3`
+(2025-12-06); every version listed above it here was developed since then and
+reaches PyPI together as **0.7.1**.
 
 Versions follow [semantic versioning](https://semver.org/) loosely: the minor
 number moves when a command or a pipeline stage is added.
