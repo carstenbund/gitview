@@ -26,8 +26,30 @@ Example run on this repository:
 - **Agent Brief**: Compile a compact, no-LLM project history digest (`gitview brief`) meant to be committed and read once per session — a token-efficient substitute for an AI coding agent re-deriving project history from scratch
 - **Repository Graph**: Build a persistent, incremental SQLite graph of commits, files, authors, PRs and file co-change coupling (`gitview graph`) — deterministic structure that later stages interpret instead of rediscovering
 - **Structural Evidence & Motifs**: Optionally store what an external code analyser (Graphify first) sees at a commit, then detect recurring motifs — hidden coupling, emerging dependencies, centrality growth — by combining history with structure (`gitview observe`, `gitview motifs`). Fully usable with no analyser installed
+- **Evidence-First Analysis**: The graph and motifs are built before any model call, so routine phases are written from repository evidence, two report sections need no model at all, and every prompt that is sent carries established facts (`--llm-budget`)
+- **Four LLM Backends**: Anthropic, OpenAI, Ollama, and a logged-in local Claude Code CLI (`--backend claude-cli`, billed to the Claude plan, no API key)
 - **Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
 - **Critical Examination Mode**: Objective assessment focused on gaps, technical debt, and alignment with project goals (perfect for project leads)
+
+## Commands
+
+| Command | What it does | LLM |
+|---|---|---|
+| `analyze` | Full pipeline: extract, chunk, summarize, narrate, write the report | yes |
+| `brief` | Compact project history digest for an AI agent to read once per session | no |
+| `graph` | Build or update the persistent repository graph (`.gitview/graph.sqlite`) | no |
+| `observe` | Store a structural observation from an external code analyser | no |
+| `motifs` | Detect recurring historical and architectural motifs | no |
+| `extract` | Extract git history to JSONL | no |
+| `chunk` | Chunk an extracted history into phases | no |
+| `storyline` | Inspect storylines tracked across phases | no |
+| `worklog` | Work log from GitHub commits across branches, for a date range | no |
+| `track-files` | Per-file change history, optionally with AI summaries | optional |
+| `file-history` | Show the change history of one file | no |
+| `inject-history` / `remove-history` | Write that history into file headers, or remove it | no |
+| `compare-branches` | Compare file histories between two branches | no |
+
+Run `gitview <command> --help` for the options of each.
 
 ## Installation
 
@@ -436,7 +458,8 @@ gitview track-files --with-ai --dry-run
 ```
 
 **Supported LLM Backends:**
-- **Anthropic Claude** (claude-sonnet-4-5, claude-haiku)
+- **Anthropic Claude** (claude-sonnet-5, claude-haiku-4-5)
+- **Claude Code CLI** (a logged-in local `claude`, billed to the plan)
 - **OpenAI GPT** (gpt-4o, gpt-4o-mini)
 - **Ollama** (llama3, mistral, codellama - runs locally, free)
 
@@ -1109,6 +1132,18 @@ cat ./project-review-q1/history_story.md
            │
            v
 ┌─────────────────────┐     ┌─────────────────────┐
+│  Evidence Ledger    │<────│  Repository Graph   │  commits, files, authors,
+│  (evidence.py)      │     │  (graph/)           │  PRs, co-change coupling
+│  Decides which      │     └──────────┬──────────┘
+│  phases need a      │                │
+│  model call, and    │     ┌──────────v──────────┐     ┌──────────────────┐
+│  supplies the facts │<────│  Motifs             │<────│  Structural      │
+│  every prompt gets  │     │  (motifs/)          │     │  (structural/)   │
+└──────────┬──────────┘     └─────────────────────┘     │  optional, via a │
+           │                                            │  provider seam   │
+           │                                            └──────────────────┘
+           v
+┌─────────────────────┐     ┌─────────────────────┐
 │  Summarizer         │────>│  Storyline Tracker  │
 │  (summarizer.py)    │     │  (storyline/)       │
 └──────────┬──────────┘     │  Multi-signal       │
@@ -1130,15 +1165,18 @@ cat ./project-review-q1/history_story.md
 
 - Python 3.8+
 - Git repository with commit history
-- **One of the following LLM backends:**
+- **One of the following LLM backends** (not needed for `brief`, `graph`, `observe`, `motifs`, `extract`, `chunk`, `worklog`):
   - **Anthropic Claude** (requires API key)
+  - **Claude Code CLI** (a logged-in local `claude`; billed to the Claude plan, no API key)
   - **OpenAI GPT** (requires API key)
   - **Ollama** (runs locally, no API key needed)
+- Optional: a structural analyser such as [Graphify](https://github.com/carstenbund/graphify) for structural motifs
 - Dependencies: gitpython, anthropic, openai, requests, click, rich, pydantic
 
 ## LLM Backend Configuration
 
-GitView supports three LLM backends with automatic detection based on environment variables:
+GitView supports four LLM backends. Without `--backend`, it picks the first available:
+`ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then a logged-in `claude` CLI, then Ollama.
 
 ### Anthropic Claude (Default)
 
@@ -1149,10 +1187,23 @@ export ANTHROPIC_API_KEY="your-api-key-here"
 gitview analyze
 ```
 
-Default models:
-- `claude-sonnet-4-5-20250929` (default)
-- `claude-3-opus-20240229` (more powerful)
-- `claude-3-haiku-20240307` (faster)
+Default model: `claude-sonnet-5`. Pass `--model` for another, for example
+`claude-opus-5` (more capable) or `claude-haiku-4-5` (cheaper).
+
+### Claude Code CLI
+
+Runs generation through a locally installed, logged-in `claude` (Claude Code)
+in print mode, so a Claude plan covers the usage and no `ANTHROPIC_API_KEY` is
+needed.
+
+```bash
+claude /login          # once
+gitview analyze --backend claude-cli
+```
+
+The model is a CLI alias (`sonnet` by default, `--model opus` for another).
+No transcript is written, and `max_tokens` and `temperature` have no CLI
+equivalent, so they are ignored.
 
 ### OpenAI GPT
 
@@ -1163,10 +1214,7 @@ export OPENAI_API_KEY="your-api-key-here"
 gitview analyze --backend openai
 ```
 
-Default models:
-- `gpt-4` (default)
-- `gpt-4-turbo-preview` (faster)
-- `gpt-3.5-turbo` (cheaper)
+Default model: `gpt-4o-mini`. Pass `--model gpt-4o` for a stronger one.
 
 ### Ollama (Local)
 
@@ -1196,7 +1244,7 @@ Popular Ollama models:
 
 ```bash
 # Specify custom model
-gitview analyze --backend anthropic --model claude-3-opus-20240229
+gitview analyze --backend anthropic --model claude-opus-5
 
 # Use custom Ollama URL
 gitview analyze --backend ollama --ollama-url http://192.168.1.100:11434

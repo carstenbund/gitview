@@ -1,267 +1,118 @@
 # Publishing GitView to PyPI
 
-This guide explains how to publish GitView to PyPI so users can install it with `pip install gitview`.
+GitView is published manually: the maintainer builds the distributions locally
+and uploads them with `twine`. Nothing in CI touches PyPI, and no publishing
+credentials live in the repository or in GitHub.
 
 ## Prerequisites
 
-1. **PyPI Account**: Create accounts on both:
-   - TestPyPI (for testing): https://test.pypi.org/account/register/
-   - PyPI (production): https://pypi.org/account/register/
-
-2. **API Tokens**: Generate API tokens for uploading:
-   - TestPyPI: https://test.pypi.org/manage/account/token/
-   - PyPI: https://pypi.org/manage/account/token/
-
-3. **Build Tools**: Install required tools:
+1. **PyPI account and API token** — https://pypi.org/manage/account/token/.
+   A TestPyPI account and token are useful for rehearsing:
+   https://test.pypi.org/manage/account/token/
+2. **Build tools**:
    ```bash
-   pip install --upgrade pip setuptools wheel build twine
+   pip install --upgrade build twine
    ```
 
-## Publishing Workflow
+## Release checklist
 
-### Step 1: Update Version
+### 1. Land the work and check CI
 
-Update the version number in:
-- `setup.py` (line 16)
-- `pyproject.toml` (line 7)
-- `gitview/__init__.py` (line 3)
+Everything to be released must be merged into `main`, and the test matrix on
+`main` must be green. A release is cut from `main`, never from a branch.
 
-```python
-__version__ = "0.1.0"  # Increment for new releases
+### 2. Update the version
+
+The version is defined in **one** place:
+
+```
+gitview/__init__.py:    __version__ = "0.7.1"
 ```
 
-### Step 2: Build the Package
+`pyproject.toml` reads it dynamically (`[tool.setuptools.dynamic]`) and
+`setup.py` imports it, so nothing else needs editing. Verify:
+
+```bash
+python -m gitview.cli --version
+```
+
+### 3. Update the changelog
+
+Add a section for the new version to [`CHANGELOG.md`](CHANGELOG.md), grouped
+into *Added*, *Changed* and *Fixed*. Describe behaviour, not commits.
+
+### 4. Commit and tag
+
+```bash
+git commit -am "chore(release): 0.7.1"
+git tag -a v0.7.1 -m "GitView 0.7.1"
+git push origin main
+git push origin v0.7.1
+```
+
+The tag is what maps a PyPI release back to the history; every published
+version should have one.
+
+### 5. Build
 
 ```bash
 ./scripts/build.sh
 ```
 
-This creates:
-- `dist/gitview-0.1.0-py3-none-any.whl` (wheel distribution)
-- `dist/gitview-0.1.0.tar.gz` (source distribution)
+This cleans `build/`, `dist/` and `*.egg-info`, runs `python -m build`, and
+verifies the result with `twine check`. It produces:
 
-The script also:
-- Cleans previous builds
-- Installs build tools
-- Verifies the package with `twine check`
+- `dist/gitview-<version>-py3-none-any.whl`
+- `dist/gitview-<version>.tar.gz`
 
-### Step 3: Test on TestPyPI
-
-**Always test on TestPyPI first!**
+Sanity-check the wheel before uploading anything:
 
 ```bash
-./scripts/publish-test.sh
+python -m venv /tmp/gv && /tmp/gv/bin/pip install -q dist/gitview-*.whl
+/tmp/gv/bin/gitview --version && /tmp/gv/bin/gitview --help
 ```
 
-You'll be prompted for your TestPyPI API token.
-
-After uploading, test the installation:
+### 6. Rehearse on TestPyPI (optional but advised for a minor bump)
 
 ```bash
-# Install from TestPyPI
-pip install --index-url https://test.pypi.org/simple/ gitview
+./scripts/publish-test.sh          # prompts for the TestPyPI token
+pip install --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ gitview
+```
 
-# Test it works
+The extra index is needed because TestPyPI does not carry GitView's
+dependencies.
+
+### 7. Publish
+
+```bash
+./scripts/publish.sh               # asks for confirmation, then the PyPI token
+```
+
+When `twine` prompts for a username, use `__token__` and paste the API token as
+the password.
+
+> **A version on PyPI cannot be replaced or reused.** If a release is broken,
+> yank it on PyPI and publish a new patch version.
+
+### 8. Verify
+
+```bash
+pip install --upgrade gitview
 gitview --version
-gitview --help
 ```
 
-View your test package at: https://test.pypi.org/project/gitview/
+## Version numbering
 
-### Step 4: Publish to PyPI (Production)
+- **Patch** (`0.7.0` → `0.7.1`): fixes, no new command or option.
+- **Minor** (`0.7.x` → `0.8.0`): a new command, a new pipeline stage, or a
+  change in what an existing command writes.
+- **Major**: reserved for a `1.0` that declares the CLI stable.
 
-Once tested, publish to the real PyPI:
+## If a release goes wrong
 
-```bash
-./scripts/publish.sh
-```
-
-⚠️ **Warning**: You cannot overwrite versions on PyPI. Once published, you cannot delete or replace a version.
-
-### Step 5: Verify
-
-Check your package is live:
-- Package page: https://pypi.org/project/gitview/
-- Install it: `pip install gitview`
-
-## Manual Publishing
-
-If you prefer manual steps:
-
-### Build
-```bash
-# Clean previous builds
-rm -rf build/ dist/ *.egg-info
-
-# Build distributions
-python -m build
-
-# Verify package
-twine check dist/*
-```
-
-### Upload to TestPyPI
-```bash
-twine upload --repository testpypi dist/*
-```
-
-### Upload to PyPI
-```bash
-twine upload dist/*
-```
-
-## Authentication
-
-### Using API Tokens (Recommended)
-
-When prompted for username, use `__token__`
-
-When prompted for password, use your API token (starts with `pypi-`)
-
-### Using ~/.pypirc
-
-Create `~/.pypirc` to avoid entering credentials:
-
-```ini
-[distutils]
-index-servers =
-    pypi
-    testpypi
-
-[pypi]
-username = __token__
-password = pypi-YOUR_PYPI_API_TOKEN_HERE
-
-[testpypi]
-username = __token__
-password = pypi-YOUR_TESTPYPI_API_TOKEN_HERE
-repository = https://test.pypi.org/legacy/
-```
-
-Secure the file:
-```bash
-chmod 600 ~/.pypirc
-```
-
-## Version Numbering
-
-Follow [Semantic Versioning](https://semver.org/):
-- **MAJOR.MINOR.PATCH** (e.g., 1.2.3)
-- **MAJOR**: Breaking changes
-- **MINOR**: New features (backward compatible)
-- **PATCH**: Bug fixes
-
-Examples:
-- `0.1.0` - Initial alpha release
-- `0.2.0` - Add new features
-- `0.2.1` - Bug fix
-- `1.0.0` - First stable release
-
-## Pre-release Versions
-
-For alpha/beta releases:
-- `0.1.0a1` - Alpha 1
-- `0.1.0b1` - Beta 1
-- `0.1.0rc1` - Release candidate 1
-
-## Package Naming
-
-The package name on PyPI is **gitview**. Users will install with:
-
-```bash
-pip install gitview
-```
-
-This is defined in:
-- `setup.py`: `name="gitview"`
-- `pyproject.toml`: `name = "gitview"`
-
-## What Gets Included
-
-Files included in the distribution are controlled by:
-
-1. **`MANIFEST.in`**: Specifies additional files to include
-2. **`setup.py`**: `find_packages()` determines Python packages
-3. **`.gitignore`**: Prevents unwanted files
-
-Included:
-- All Python packages (`gitview/`)
-- `README.md`, `LICENSE`, `INSTALL.md`
-- `requirements.txt`
-- `bin/gitview` executable wrapper
-
-Excluded:
-- Tests, examples
-- Git files, cache files
-- Output directories
-
-## Testing Your Package
-
-After publishing to TestPyPI:
-
-```bash
-# Create a new virtual environment
-python -m venv test-env
-source test-env/bin/activate  # or `test-env\Scripts\activate` on Windows
-
-# Install from TestPyPI
-pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ gitview
-
-# Test it
-gitview --version
-gitview analyze --help
-python verify_installation.py
-```
-
-Note: `--extra-index-url` is needed because dependencies (anthropic, openai, etc.) are on the real PyPI.
-
-## Troubleshooting
-
-### "File already exists" error
-- You cannot upload the same version twice
-- Increment the version number
-- Or delete the package on TestPyPI and try again (only possible on TestPyPI)
-
-### "Invalid distribution" error
-- Run `twine check dist/*` to see what's wrong
-- Common issues:
-  - Missing README.md
-  - Invalid RST in long_description
-  - Missing required metadata
-
-### Dependencies not installing
-- Make sure `requirements.txt` lists all dependencies
-- Check `install_requires` in `setup.py`
-- Verify `dependencies` in `pyproject.toml`
-
-### Command not found after install
-- Verify entry point in `pyproject.toml`: `gitview = "gitview.cli:main"`
-- Check `console_scripts` in `setup.py`
-- Try reinstalling: `pip install --force-reinstall gitview`
-
-## After Publishing
-
-1. **Create a Git tag** for the release:
-   ```bash
-   git tag -a v0.1.0 -m "Release version 0.1.0"
-   git push origin v0.1.0
-   ```
-
-2. **Create a GitHub Release**:
-   - Go to: https://github.com/carstenbund/gitview/releases
-   - Click "Create a new release"
-   - Select the tag
-   - Add release notes
-
-3. **Update documentation**:
-   - Update README.md with installation instructions
-   - Add release notes
-   - Update CHANGELOG.md (if you have one)
-
-## Resources
-
-- **PyPI**: https://pypi.org
-- **TestPyPI**: https://test.pypi.org
-- **Python Packaging Guide**: https://packaging.python.org/
-- **Twine Documentation**: https://twine.readthedocs.io/
-- **Semantic Versioning**: https://semver.org/
+1. Yank the version on PyPI (project → Manage → Releases → Yank). Yanking hides
+   it from new installs while leaving pinned installs working.
+2. Fix `main`, bump the patch version, tag it, and publish again.
+3. Delete the bad tag only if it was never pushed; otherwise leave it and note
+   the problem in the changelog.

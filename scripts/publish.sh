@@ -25,7 +25,7 @@ if [ ! -d "dist" ]; then
 fi
 
 # Check version doesn't already exist on PyPI
-VERSION=$(python -c "import setup; print(setup.__version__)" 2>/dev/null || echo "0.1.0")
+VERSION=$(python -c "import gitview; print(gitview.__version__)" 2>/dev/null || echo "unknown")
 echo ""
 echo "Publishing version: $VERSION"
 echo ""
