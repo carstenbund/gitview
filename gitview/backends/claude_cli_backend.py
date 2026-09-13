@@ -11,10 +11,11 @@ Design notes:
 - A ``system`` message is folded into the user turn. Recent CLIs (>= 2.1)
   still layer their own coding-agent context over ``--system-prompt``, so the
   flag is not a reliable sole authority; an explicit preamble is.
-- The subprocess runs from a neutral temporary directory with tools disabled
-  and session persistence off: it must neither read the analysed repository's
-  ``CLAUDE.md`` nor trigger that repository's hooks, and it is a pure text
-  completion, not an agent turn.
+- The invocation mirrors Graphify's proven one (``-p --output-format json
+  --no-session-persistence``, prompt on stdin, current working directory kept):
+  a fresh temporary cwd can trip Claude Code's workspace-trust check, which
+  print mode cannot answer, and an empty ``--tools`` list is not needed for a
+  text completion. Session-persistence is off so no transcript is written.
 - ``max_tokens`` and ``temperature`` have no CLI equivalent and are ignored.
 """
 
@@ -22,7 +23,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from typing import List, Optional
 
 from .base import BaseLLMBackend, LLMMessage, LLMResponse
@@ -74,18 +74,22 @@ class ClaudeCLIBackend(BaseLLMBackend):
         prompt = fold_messages(messages)
         env = {k: v for k, v in os.environ.items() if k not in _SESSION_ENV}
         cmd = [exe, "-p", "--output-format", "json", "--no-session-persistence",
-               "--tools", "", "--model", self.model]
-        with tempfile.TemporaryDirectory(prefix="gitview-claude-") as cwd:
-            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                  cwd=cwd, env=env, timeout=self.timeout)
+               "--model", self.model]
+        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                              env=env, timeout=self.timeout)
+        shown = " ".join(cmd)
+        stderr = proc.stderr.strip()[-800:]
         if proc.returncode != 0 and not proc.stdout.strip():
-            raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {proc.stderr.strip()[-500:]}")
+            raise RuntimeError(f"claude CLI failed (exit {proc.returncode}) running `{shown}`:\n{stderr}")
         try:
             data = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"claude CLI returned non-JSON output: {proc.stdout[:200]!r}") from exc
+            raise RuntimeError(
+                f"claude CLI returned non-JSON output running `{shown}`:\n"
+                f"stdout: {proc.stdout[:300]!r}\nstderr: {stderr}") from exc
         if data.get("is_error"):
-            raise RuntimeError(f"claude CLI error: {data.get('result')}")
+            raise RuntimeError(f"claude CLI error running `{shown}`: {data.get('result')}"
+                               + (f"\nstderr: {stderr}" if stderr else ""))
         raw_usage = data.get("usage") or {}
         usage: Optional[dict] = None
         if raw_usage:

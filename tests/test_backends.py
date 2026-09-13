@@ -63,7 +63,7 @@ def test_generate_runs_cli_in_print_mode(tmp_path, monkeypatch):
     assert call["stdin"] == "summarise"
     assert "-p" in call["argv"] and "--model" in call["argv"] and "haiku" in call["argv"]
     assert "--no-session-persistence" in call["argv"]
-    assert call["cwd"] != os.getcwd()           # neutral cwd: no CLAUDE.md / hooks of the analysed repo
+    assert "--tools" not in call["argv"]      # same shape as graphify's proven invocation
     assert call["env_has_claudecode"] is False  # nested-session markers stripped
 
 
