@@ -87,6 +87,7 @@ class GraphStats:
     pull_requests: int
     commit_file_edges: int
     file_edges: int
+    structural_snapshots: int = 0
     most_changed: List[FileTouchStats] = field(default_factory=list)
     most_coupled: List[FileCouplingEdge] = field(default_factory=list)
     most_connected: List[FileDegree] = field(default_factory=list)
@@ -101,6 +102,7 @@ class GraphStats:
             'pull_requests': self.pull_requests,
             'commit_file_edges': self.commit_file_edges,
             'file_edges': self.file_edges,
+            'structural_snapshots': self.structural_snapshots,
             'most_changed': [asdict(x) for x in self.most_changed],
             'most_coupled': [asdict(x) for x in self.most_coupled],
             'most_connected': [asdict(x) for x in self.most_connected],

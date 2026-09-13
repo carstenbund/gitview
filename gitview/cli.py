@@ -20,6 +20,8 @@ from .commands import (
     WorklogCommand,
     BriefCommand,
     GraphCommand,
+    ObserveCommand,
+    MotifsCommand,
 )
 from .commands.storyline import (
     ListStorylineCommand,
@@ -290,6 +292,7 @@ EXAMPLES:
   gitview graph --stats        # Also list most changed / coupled / connected files
   gitview graph --rebuild      # Drop and rebuild from scratch
   gitview graph --json         # Machine-readable counts and top lists
+  gitview graph --structural graphify   # Also store a structural observation (see `observe`)
 """
 
 
@@ -308,9 +311,123 @@ EXAMPLES:
               help="Print results as JSON instead of tables")
 @click.option('--max-projection-files', type=int, default=None,
               help="Commits touching more files than this get no file↔file edges (default: 100)")
+@click.option('--structural', metavar='PROVIDER', default=None,
+              help="Also store a structural observation from PROVIDER (e.g. graphify)")
+@click.option('--source', default=None,
+              help="Existing provider output to read instead of the default location")
+@click.option('--refresh', is_flag=True,
+              help="Re-run the structural provider instead of reusing its last output")
 def graph(**kwargs):
     """Build or update the persistent repository graph."""
     cmd = GraphCommand(**kwargs)
+    cmd.run()
+
+
+OBSERVE_HELP = """Store a structural observation as optional graph evidence (no LLM).
+
+\b
+GitView's own graph is built from git history. A structural provider (an
+external code analyser) can additionally describe the *present* shape of the
+code — which file imports, calls or inherits from which — at one commit.
+GitView translates that into its own neutral model and stores it with
+provenance (provider, version, observed commit, content hash) in
+<repo>/.gitview/graph.sqlite next to the historical evidence.
+
+\b
+Everything else keeps working without a provider installed; structural
+motifs simply become available once an observation exists. Observe at
+several commits to enable series motifs (emerging dependency, centrality
+growth, architectural split).
+
+\b
+PROVIDERS:
+  graphify   reads <repo>/graphify-out/graph.json (run `graphify update` first,
+             or pass --refresh to let GitView run it)
+             Inside a git submodule with no graph of its own, the
+             superproject's graphify-out/ is used and re-based under the
+             module's path: one graph built at the superproject root
+             serves every module.
+
+\b
+EXAMPLES:
+  gitview observe --structural graphify
+  gitview observe --structural graphify --refresh
+  gitview observe --structural graphify --source path/to/graph.json
+  gitview observe --list
+"""
+
+
+@cli.command(help=OBSERVE_HELP)
+@click.option('--repo', '-r', default=".",
+              help="Path to a local git repository (default: current directory)")
+@click.option('--branch', default='HEAD',
+              help="Branch whose tip the observation belongs to (default: HEAD)")
+@click.option('--structural', metavar='PROVIDER', default='graphify',
+              help="Structural provider to use (default: graphify)")
+@click.option('--source', default=None,
+              help="Existing provider output to read instead of the default location")
+@click.option('--refresh', is_flag=True,
+              help="Re-run the provider instead of reusing its last output")
+@click.option('--list', 'list_providers', is_flag=True,
+              help="List known providers and whether they are available")
+@click.option('--json', 'json_output', is_flag=True,
+              help="Print the stored observation as JSON")
+def observe(**kwargs):
+    """Store a structural observation."""
+    cmd = ObserveCommand(**kwargs)
+    cmd.run()
+
+
+MOTIFS_HELP = """Detect recurring historical and architectural motifs (no LLM).
+
+\b
+Historical motifs need only git history:
+  repeated co-change, ownership transition
+Structural + historical motifs also need a structural observation
+(see `gitview observe`):
+  hidden coupling, confirmed coupling, stable interface
+and, with observations at two or more commits:
+  emerging dependency, architectural split, centrality growth
+
+\b
+Motifs whose evidence is missing are listed as skipped with the reason.
+
+\b
+EXAMPLES:
+  gitview motifs
+  gitview motifs --only hidden_coupling,emerging_dependency
+  gitview motifs --min-cochanges 5 --top 10
+  gitview motifs --json
+  gitview motifs --list
+"""
+
+
+@cli.command(help=MOTIFS_HELP)
+@click.option('--repo', '-r', default=".",
+              help="Path to a local git repository (default: current directory)")
+@click.option('--branch', default='HEAD',
+              help="Branch to analyze (default: HEAD)")
+@click.option('--only', default=None,
+              help="Comma-separated motif ids to run (default: all)")
+@click.option('--provider', default=None,
+              help="Restrict structural evidence to this provider (default: most recent)")
+@click.option('--min-cochanges', type=int, default=None,
+              help="Co-changes before a pair counts as coupled (default: 3)")
+@click.option('--min-jaccard', type=float, default=None,
+              help="Minimum co-change share for repeated co-change (default: 0.2)")
+@click.option('--min-touches', type=int, default=None,
+              help="Commits a file needs before it is judged (default: 3)")
+@click.option('--min-degree-growth', type=int, default=None,
+              help="Structural neighbours gained before centrality counts as growing (default: 3)")
+@click.option('--top', type=int, default=None,
+              help="Findings per motif (default: 20)")
+@click.option('--list', 'list_motifs', is_flag=True,
+              help="List motifs and the evidence each one needs")
+@click.option('--json', 'json_output', is_flag=True,
+              help="Print findings as JSON")
+def motifs(**kwargs):
+    """Detect historical and architectural motifs."""
+    cmd = MotifsCommand(**kwargs)
     cmd.run()
 
 

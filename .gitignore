@@ -220,3 +220,9 @@ docs/timeline.md
 
 # Don't ignore bin/gitview executable
 !bin/gitview
+
+# Local virtualenv
+gv/
+
+# Graphify output (structural observations are stored in .gitview/graph.sqlite)
+graphify-out/

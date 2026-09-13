@@ -25,6 +25,7 @@ Example run on this repository:
 - **Storyline Tracking**: Track narrative threads (features, refactoring efforts, bug campaigns) across phases with automatic detection and lifecycle management
 - **Agent Brief**: Compile a compact, no-LLM project history digest (`gitview brief`) meant to be committed and read once per session — a token-efficient substitute for an AI coding agent re-deriving project history from scratch
 - **Repository Graph**: Build a persistent, incremental SQLite graph of commits, files, authors, PRs and file co-change coupling (`gitview graph`) — deterministic structure that later stages interpret instead of rediscovering
+- **Structural Evidence & Motifs**: Optionally store what an external code analyser (Graphify first) sees at a commit, then detect recurring motifs — hidden coupling, emerging dependencies, centrality growth — by combining history with structure (`gitview observe`, `gitview motifs`). Fully usable with no analyser installed
 - **Multiple Output Formats**: Generates markdown reports, JSON data, and timelines
 - **Critical Examination Mode**: Objective assessment focused on gaps, technical debt, and alignment with project goals (perfect for project leads)
 
@@ -220,6 +221,48 @@ gitview graph                     # Build or update .gitview/graph.sqlite, print
 gitview graph --stats             # Also list most changed / most coupled / most connected files
 gitview graph --rebuild           # Drop and rebuild from scratch
 gitview graph --json              # Machine-readable output
+```
+
+### Structural Evidence & Motifs (No LLM)
+
+GitView's graph is built from git history alone. A *structural provider* — an
+external code analyser — can add the present shape of the code (which file
+imports, calls or inherits from which) at one commit. GitView translates that
+into its own neutral model (`StructuralSnapshot`, `StructuralNode`,
+`StructuralEdge`) and stores it in `.gitview/graph.sqlite` with provenance:
+provider, provider version, the commit it observed and a hash of the raw
+output. Nothing in GitView's core names the analyser; Graphify is simply the
+first implementation of the `StructuralProvider` seam.
+
+```bash
+gitview observe --structural graphify            # store graphify-out/graph.json as an observation
+gitview observe --structural graphify --refresh  # let GitView run `graphify update` first
+gitview graph --structural graphify              # build the graph and observe in one go
+gitview motifs                                   # detect motifs
+gitview motifs --list                            # motif catalog with evidence requirements
+gitview motifs --only hidden_coupling --json
+```
+
+Motifs declare the evidence they need and are skipped, with the reason, when it
+is missing — so `gitview motifs` always works, just with fewer motifs:
+
+| Evidence | Motifs |
+|----------|--------|
+| History only | repeated co-change, ownership transition |
+| History + one observation | hidden coupling, confirmed coupling, stable interface |
+| History + observations at two or more commits | emerging dependency, architectural split, centrality growth |
+
+In a multi-repository layout (git submodules), build Graphify once at the
+superproject root; `gitview observe` run inside a module finds that graph on
+its own and re-bases it under the module's path, so each module's history is
+matched against the structure of the whole system. Edges into other modules
+are dropped (they have no counterpart in this module's history), and the
+observation records the module's own commit.
+
+Observe again after significant work (or from an older commit via `--source`)
+to enable the series motifs; GitView orders observations by their commit's
+position in the history graph and reports, for example, how many commits of
+co-change preceded a dependency becoming explicit in the source.
 ```
 
 Commit the result so future sessions (yours or an agent's) can read it
