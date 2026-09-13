@@ -783,11 +783,15 @@ class AnalyzeCommand(BaseCommand):
             model=router_for_estimate.model
         )
 
-        if estimate['cost_usd'] > 0:
+        if estimate['cost_usd'] > 0 or estimate.get('plan_billed'):
             self.console.print(f"\n[bold]Cost Estimate:[/bold]")
             self.console.print(f"  Backend: {estimate['backend']} / {estimate['model']}")
             self.console.print(f"  Estimated tokens: ~{estimate['input_tokens']:,} input + ~{estimate['output_tokens']:,} output")
-            self.console.print(f"  Estimated cost: [yellow]${estimate['cost_usd']:.2f}[/yellow]")
+            if estimate.get('plan_billed'):
+                self.console.print(f"  Estimated cost: [yellow]billed to your Claude plan[/yellow] "
+                                   f"(≈ ${estimate['api_equivalent_usd']:.2f} at API rates)")
+            else:
+                self.console.print(f"  Estimated cost: [yellow]${estimate['cost_usd']:.2f}[/yellow]")
             self.console.print(f"  ({estimate['num_phases']} phases to summarize + story generation)")
 
             if estimate['cost_usd'] > 2.0:
@@ -818,14 +822,26 @@ class AnalyzeCommand(BaseCommand):
         total_input_tokens = phase_summarization_input + story_input_tokens
         total_output_tokens = phase_summarization_output + story_output_tokens
 
+        # USD per 1M tokens (input, output), Anthropic/OpenAI list prices.
+        anthropic_rates = {
+            'claude-opus-5': (5.00, 25.00),
+            'claude-sonnet-5': (2.00, 10.00),
+            'claude-sonnet-4-6': (3.00, 15.00),
+            'claude-haiku-4-5': (1.00, 5.00),
+            'claude-sonnet-4-5-20250929': (3.00, 15.00),
+            'claude-sonnet-3-5-20240229': (3.00, 15.00),
+            'claude-haiku-3-5-20241022': (0.25, 1.25),
+        }
+        # The Claude Code CLI accepts tier aliases; price them at the current model of that tier.
+        cli_alias = {'opus': 'claude-opus-5', 'sonnet': 'claude-sonnet-5', 'haiku': 'claude-haiku-4-5'}
         cost_table = {
             ('openai', 'gpt-4o-mini'): (0.150, 0.600),
             ('openai', 'gpt-4o'): (2.50, 10.00),
-            ('anthropic', 'claude-sonnet-4-5-20250929'): (3.00, 15.00),
-            ('anthropic', 'claude-sonnet-3-5-20240229'): (3.00, 15.00),
-            ('anthropic', 'claude-haiku-3-5-20241022'): (0.25, 1.25),
             ('ollama', None): (0, 0),
         }
+        cost_table.update({('anthropic', m): r for m, r in anthropic_rates.items()})
+        cost_table.update({('claude-cli', alias): anthropic_rates[m] for alias, m in cli_alias.items()})
+        cost_table.update({('claude-cli', m): r for m, r in anthropic_rates.items()})
 
         input_cost_per_m, output_cost_per_m = cost_table.get((backend, model), (1.0, 5.0))
 
@@ -834,8 +850,13 @@ class AnalyzeCommand(BaseCommand):
             (total_output_tokens / 1_000_000) * output_cost_per_m
         )
 
+        # claude-cli is billed to the user's Claude plan, not per token: the
+        # dollar figure is only the API-rate equivalent, for orientation.
+        plan_billed = backend == 'claude-cli'
         return {
-            'cost_usd': estimated_cost,
+            'cost_usd': 0.0 if plan_billed else estimated_cost,
+            'api_equivalent_usd': estimated_cost,
+            'plan_billed': plan_billed,
             'num_phases': num_phases,
             'input_tokens': total_input_tokens,
             'output_tokens': total_output_tokens,
