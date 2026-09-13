@@ -32,6 +32,11 @@ number moves when a command or a pipeline stage is added.
   used to hit the output-token cap part-way through; it is now generated in
   batches of at most ten phases, and every section warns when the model stops
   at `max_tokens`. Storyline report bullets clip at a word boundary.
+- **Motif results were non-deterministic.** The structural edge index was
+  cached in a module-level dict keyed by `id(snapshot)`; once a snapshot was
+  garbage collected its address could be reused, and a later snapshot inherited
+  the freed one's edges, which made hidden coupling disappear. The index is
+  cached per context now, on objects that context keeps alive.
 - The phase cache was ignored because `load_phases` picked up `phase_index.json`;
   the story cache ignored `--directives`, `--critical` and `--todo`.
 - Help text is ASCII, so `--help` renders on Windows cp1252 consoles.
