@@ -15,8 +15,32 @@ _NO_SAMPLING_PREFIXES = (
 )
 
 
+#: Models that run adaptive thinking unless told otherwise. GitView's prompts
+#: are summarization with small max_tokens; thinking tokens count against that
+#: cap and would leave the text truncated, so it is switched off where the API
+#: allows (Sonnet 5, Opus 5). Fable/Mythos reject `disabled`: thinking stays on
+#: and the cap is raised instead.
+_THINKING_DEFAULT_PREFIXES = ("claude-sonnet-5", "claude-opus-5")
+_THINKING_ALWAYS_PREFIXES = ("claude-fable", "claude-mythos")
+
+
 def accepts_temperature(model: str) -> bool:
     return not str(model).startswith(_NO_SAMPLING_PREFIXES)
+
+
+def thinking_request_fields(model: str, max_tokens: int) -> dict:
+    """Extra request fields (and possibly a larger max_tokens) for thinking-by-default models."""
+    name = str(model)
+    if name.startswith(_THINKING_DEFAULT_PREFIXES):
+        return {"thinking": {"type": "disabled"}}
+    if name.startswith(_THINKING_ALWAYS_PREFIXES):
+        return {"max_tokens": max(max_tokens, 8000)}
+    return {}
+
+
+def response_text(content) -> str:
+    """Concatenate the text blocks of a Messages response, skipping thinking and other block types."""
+    return "".join(getattr(b, "text", "") for b in content if getattr(b, "type", "text") == "text")
 
 
 class AnthropicBackend(BaseLLMBackend):
@@ -56,6 +80,7 @@ class AnthropicBackend(BaseLLMBackend):
         ]
 
         request = dict(model=self.model, max_tokens=max_tokens, messages=anthropic_messages)
+        request.update(thinking_request_fields(self.model, max_tokens))
         if self._send_temperature:
             request['temperature'] = kwargs.get('temperature', self.temperature)
 
@@ -80,7 +105,7 @@ class AnthropicBackend(BaseLLMBackend):
 
         # Return standardized response
         return LLMResponse(
-            content=response.content[0].text,
+            content=response_text(response.content),
             model=response.model,
             usage=usage,
             metadata={'stop_reason': response.stop_reason}
