@@ -421,6 +421,48 @@ class EvidenceLedger:
             lines.append(f"*Not evaluated: {', '.join(sorted(report.skipped))} — structural observation needed.*")
         return '\n'.join(lines).rstrip() + '\n'
 
+    def hard_facts(self, phases: Sequence[Phase], repo_name: Optional[str] = None) -> str:
+        """Facts every story prompt must respect: span, people, modules, files, versions.
+
+        Rendered as a block the storyteller inserts before the writing
+        instruction, ending with rules that forbid the usual inventions
+        (periods after the last commit, technologies from general knowledge,
+        a "team" where there is one author).
+        """
+        records = self.records
+        if not records:
+            return ''
+        first, last = records[0].timestamp[:10], records[-1].timestamp[:10]
+        authors = Counter(r.author for r in records)
+        dirs: Counter = Counter()
+        for r in records:
+            for path in r.files_stats:
+                if '/' in path:
+                    dirs[path.split('/', 1)[0]] += 1
+        submodules = _submodules(self.repo_path)
+        versions = _version_strings(r.commit_subject for r in records)
+        lines = [f"**Hard facts about {repo_name or self.repo_path.name} (from git; authoritative):**",
+                 f"- History covered: {first} to {last}, {len(records)} commits in {len(phases)} phase(s). "
+                 f"Nothing after {last} has happened.",
+                 "- Contributors (complete list): " + ', '.join(f"{a} ({n} commits)" for a, n in authors.most_common())
+                 + ("" if len(authors) > 1 else " - a single developer, not a team")]
+        if submodules:
+            lines.append("- Git submodules (complete list): " + ', '.join(submodules))
+        if dirs:
+            lines.append("- Top-level directories touched: " + ', '.join(d for d, _ in dirs.most_common(15)))
+        if self.stats.most_changed:
+            lines.append("- Most changed files: " + ', '.join(f.path for f in self.stats.most_changed[:10]))
+        if versions:
+            lines.append("- Version strings that appear in commit subjects: " + ', '.join(versions))
+        lines += [
+            "",
+            "**Rules:** Stay inside these facts and the phase summaries. Do not describe events, periods or "
+            "outcomes after the last commit date. Do not name tools, services, frameworks or technologies "
+            "that do not appear above or in the summaries. Name modules and files exactly as listed. "
+            "Do not present plans or proposals as implemented work.",
+        ]
+        return '\n'.join(lines)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'graph': {'path': str(self.store_path), 'action': self.sync.action, 'reason': self.sync.reason},
@@ -543,6 +585,29 @@ def _language_shift(start: Dict[str, int], end: Dict[str, int]) -> str:
     if not start and not end:
         return ''
     return f"Language mix went from {mix(start) or 'n/a'} to {mix(end) or 'n/a'}."
+
+
+def _submodules(repo_path: Path) -> List[str]:
+    """Submodule paths from ``.gitmodules``, in file order."""
+    gitmodules = repo_path / '.gitmodules'
+    try:
+        text = gitmodules.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return []
+    return re.findall(r'^\s*path\s*=\s*(\S+)', text, flags=re.MULTILINE)
+
+
+_VERSION_RE = re.compile(r'(?<![\w.])v?(\d+\.\d+(?:\.\d+){0,2})(?![\w.])')
+
+
+def _version_strings(subjects: Iterable[str], limit: int = 12) -> List[str]:
+    """Distinct version-like tokens in commit subjects, most frequent first, then sorted."""
+    counts: Counter = Counter()
+    for subject in subjects:
+        for v in _VERSION_RE.findall(subject or ''):
+            counts[v] += 1
+    top = [v for v, _ in counts.most_common(limit)]
+    return sorted(top, key=lambda v: tuple(int(x) for x in v.split('.')))
 
 
 def _short(text: Optional[str], n: int) -> str:

@@ -1083,7 +1083,9 @@ class AnalyzeCommand(BaseCommand):
         # Get storylines for narrative continuity
         storylines = storyline_tracker.get_storylines_for_prompt(limit=10)
         precomputed = {}
+        facts = None
         if ledger is not None:
+            facts = ledger.hard_facts(phases, repo_name)
             precomputed = {
                 'technical_evolution': ledger.technical_evolution(phases),
                 'deletion_story': ledger.deletion_story(phases),
@@ -1102,7 +1104,7 @@ class AnalyzeCommand(BaseCommand):
 
             with self.create_progress() as progress:
                 task = progress.add_task("Generating hierarchical timeline...", total=None)
-                timeline = storyteller.generate_timeline(phases, repo_name=repo_name)
+                timeline = storyteller.generate_timeline(phases, repo_name=repo_name, facts=facts)
                 progress.update(task, completed=True)
 
             stories = {
@@ -1126,6 +1128,7 @@ class AnalyzeCommand(BaseCommand):
                 directives=directives,
                 storylines=storylines,
                 precomputed_sections=precomputed,
+                facts=facts,
             )
 
             with self.create_progress() as progress:
