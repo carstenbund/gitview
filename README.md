@@ -241,7 +241,7 @@ gitview brief -o docs/BRIEF.md
 # Build/update the persistent repository graph (no LLM)
 gitview graph                     # Build or update .gitview/graph.sqlite, print counts
 gitview graph --stats             # Also list most changed / most coupled / most connected files
-gitview graph --rebuild           # Drop and rebuild from scratch
+gitview graph --rebuild           # Rebuild history from scratch (structural observations are kept)
 gitview graph --json              # Machine-readable output
 ```
 
