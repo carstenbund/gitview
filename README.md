@@ -51,6 +51,42 @@ Example run on this repository:
 
 Run `gitview <command> --help` for the options of each.
 
+## Roadmap: Phased History
+
+> **Planned, not implemented.** The commands below do not exist yet. Design:
+> [docs/PHASED_HISTORY_DESIGN.md](docs/PHASED_HISTORY_DESIGN.md).
+
+Today's reports retell history as one long document and regenerate their
+global narrative whenever new commits arrive. Phased history treats history as
+append-only: the first run is the expensive one, and every later run only adds
+what is new.
+
+- **Phases come from your versions.** A *version descriptor* in the project
+  file you already have (`[tool.gitview.versioning]` in `pyproject.toml`, or
+  `Cargo.toml`, `package.json`, `.gitview.toml`) says where the repository is
+  versioned — tags, a version file, numbered migrations — and which component
+  seals a phase. Convention: any DDL change is a phase boundary; a code-only
+  change is a step inside it. `gitview versions detect` drafts the descriptor
+  from the repository; you confirm it, because you know what your numbers mean.
+- **Each sealed phase is one JSON record**, generated once and never
+  recomputed by an upgrade:
+  - `history` — commits, PRs, hot files, co-change pairs (from the graph)
+  - `structure` — a digest of what the structural provider (Graphify) saw at the
+    end of the phase; Graphify only sees the present, so this is how structural
+    history is kept
+  - `summary` — LLM claims, each pointing at the commits, PRs and files that
+    support it
+- **Documents are rendered on command, without an LLM**: a one-page summary,
+  a phase index, one page per phase with a drill-down detail index, and step
+  reports between any two versions.
+
+```bash
+gitview versions detect --write   # draft the version descriptor
+gitview versions check            # validate it against the whole history
+gitview summarize                 # write records for phases that have none
+gitview render --from 6.24 --to 6.30
+```
+
 ## Installation
 
 ### Option 1: Install from PyPI (recommended)
@@ -330,7 +366,10 @@ co-change preceded a dependency becoming explicit in the source.
 ```
 
 Commit the result so future sessions (yours or an agent's) can read it
-instead of re-analyzing the repository. `--repo` accepts a local path only
+instead of re-analyzing the repository. A committed brief is stale after the
+next commit, so check it with `gitview brief --check` before relying on it;
+the planned `gitview render` replaces it with documents generated on demand
+(see [Roadmap: Phased History](#roadmap-phased-history)). `--repo` accepts a local path only
 (unlike `analyze`/`worklog`, which also accept GitHub shortcuts/URLs).
 
 ### Work Log (GitHub, No LLM)

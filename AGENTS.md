@@ -125,6 +125,7 @@ writing:
 | `docs/STORYLINE_IMPLEMENTATION_PLAN.md`, `docs/HIERARCHICAL_STRATEGY.md` | Implemented — `storyline/` package, `hierarchical_summarizer.py`/`hierarchical_storyteller.py` |
 | `OPTIMIZATION_PROPOSAL.md` | Partially implemented — `CacheManager` (`cache.py`) was built but is not wired into `analyze.py`; `history_data.json` still embeds full phase objects rather than references |
 | `docs/GRAPH_MILESTONE_1_PLAN.md` | Implemented — `graph/` package and `gitview graph`; communities/hotspots/evidence packets are later milestones |
+| `docs/PHASED_HISTORY_DESIGN.md` | Design, not implemented — version descriptor, sealed per-phase JSON records (history/structure/summary), docs rendered on command |
 | `JSON_TRACKER_PROPOSAL.md` / `docs/json_tracker_architecture.md` | Not implemented — proposes tracking JSON *config file* diffs specifically; no `json_tracker.py` exists |
 
 ---
