@@ -39,6 +39,10 @@ class SyncResult:
     new_commits: int
     metadata: GraphMetadata
     reason: str = ''
+    # Set on 'built' only: structural observations carried across the rebuild,
+    # and how many of those point at commits no longer in the history.
+    structural_kept: int = 0
+    structural_unplaced: int = 0
 
 
 def default_graph_path(repo_path: Union[str, Path]) -> Path:
@@ -92,9 +96,7 @@ class GraphUpdater:
 
             reason = self._rebuild_reason(repo, meta, tip_sha, rebuild)
             if reason:
-                records = loader()
-                metadata = builder.build(records)
-                return SyncResult('built', len(records), metadata, reason)
+                return _build(builder, store, loader(), reason)
 
             if meta.last_commit_hash == tip_sha:
                 return SyncResult('unchanged', 0, meta, 'graph head matches branch tip')
@@ -103,9 +105,7 @@ class GraphUpdater:
             new_records = _records_after(records, meta.last_commit_hash)
             if new_records is None:
                 # Cached history does not contain the stored head: be safe.
-                metadata = builder.build(records)
-                return SyncResult('built', len(records), metadata,
-                                  'stored head not found in extracted history')
+                return _build(builder, store, records, 'stored head not found in extracted history')
 
             metadata = builder.update(new_records)
             return SyncResult('updated', len(new_records), metadata,
@@ -130,6 +130,14 @@ class GraphUpdater:
         if not head_descends_from(repo, meta.last_commit_hash, tip_sha):
             return 'history rewritten (stored head is not an ancestor of the branch tip)'
         return ''
+
+
+def _build(builder: GraphBuilder, store: GraphStore, records: List[CommitRecord], reason: str) -> SyncResult:
+    metadata = builder.build(records)
+    observations = store.structural_observations()
+    return SyncResult('built', len(records), metadata, reason,
+                      structural_kept=len(observations),
+                      structural_unplaced=sum(1 for o in observations if o.sequence is None))
 
 
 def _records_after(records: List[CommitRecord], last_hash: str) -> Optional[List[CommitRecord]]:

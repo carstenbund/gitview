@@ -56,6 +56,8 @@ class GraphCommand(BaseCommand):
                 'action': result.action,
                 'reason': result.reason,
                 'new_commits': result.new_commits,
+                'structural_kept': result.structural_kept,
+                'structural_unplaced': result.structural_unplaced,
                 'graph_path': str(updater.store_path),
                 'metadata': result.metadata.to_dict(),
                 'stats': stats.to_dict(),
@@ -80,6 +82,13 @@ class GraphCommand(BaseCommand):
         verb = {'built': 'Built', 'updated': 'Updated', 'unchanged': 'Up to date'}[result.action]
         detail = f" ({result.reason})" if result.reason and result.action != 'unchanged' else ''
         self.print_success(f"{verb}: {store_path}{detail}")
+        if result.structural_kept:
+            self.console.print(
+                f"Kept {result.structural_kept:,} structural observation(s) across the rebuild")
+        if result.structural_unplaced:
+            self.print_warning(
+                f"{result.structural_unplaced:,} structural observation(s) point at commits no longer "
+                f"in the history; series motifs cannot order them")
         self.console.print()
         self.console.print("[bold]Repository graph[/bold]")
         self.console.print("----------------")
