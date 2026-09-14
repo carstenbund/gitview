@@ -18,6 +18,7 @@ from .brief import BriefCommand
 from .graph import GraphCommand
 from .observe import ObserveCommand
 from .motifs import MotifsCommand
+from .versions import VersionsCheckCommand, VersionsDetectCommand, VersionsListCommand
 
 __all__ = [
     'BaseCommand',
@@ -34,4 +35,7 @@ __all__ = [
     'GraphCommand',
     'ObserveCommand',
     'MotifsCommand',
+    'VersionsListCommand',
+    'VersionsCheckCommand',
+    'VersionsDetectCommand',
 ]
