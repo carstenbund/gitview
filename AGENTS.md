@@ -70,6 +70,18 @@ won't be touched by that command — update them yourself when they go stale.
 - `analysis/stats.py` — counts and most changed / coupled / connected lists.
   Milestone plan: `docs/GRAPH_MILESTONE_1_PLAN.md`.
 
+**Versioning** (`versioning/`, no LLM) — phases from the repository's own versions:
+- `models.py` — `Descriptor`/`SourceSpec`/`FieldSpec`, `VersionEvent`,
+  `VersionPhase`, `VersionTimeline`, `Problem`; roles generation/boundary/step/label.
+- `descriptor.py` — lookup (`pyproject.toml` → `Cargo.toml` → `package.json` →
+  `.gitview.toml`) and validation; a descriptor is scoped to its directory.
+- `sources.py` — `BranchHistory` (first-parent chain via `git`) and the
+  `tag`/`file`/`sequence` translators; file parsers.
+- `timeline.py` — merges sources (first source in effect wins), derives events
+  and phases, reports problems (unresolved roles, backwards versions, disagreement).
+- `detect.py` — drafts a descriptor with evidence; roles are always `"?"` +
+  `suggested`. Design: `docs/PHASED_HISTORY_DESIGN.md`.
+
 **LLM narrative generation** (requires `--backend`/API key or Ollama):
 - `backends/{anthropic,openai,ollama}_backend.py` + `router.py` — pluggable
   LLM backends.
@@ -125,7 +137,7 @@ writing:
 | `docs/STORYLINE_IMPLEMENTATION_PLAN.md`, `docs/HIERARCHICAL_STRATEGY.md` | Implemented — `storyline/` package, `hierarchical_summarizer.py`/`hierarchical_storyteller.py` |
 | `OPTIMIZATION_PROPOSAL.md` | Partially implemented — `CacheManager` (`cache.py`) was built but is not wired into `analyze.py`; `history_data.json` still embeds full phase objects rather than references |
 | `docs/GRAPH_MILESTONE_1_PLAN.md` | Implemented — `graph/` package and `gitview graph`; communities/hotspots/evidence packets are later milestones |
-| `docs/PHASED_HISTORY_DESIGN.md` | Design, not implemented — version descriptor, sealed per-phase JSON records (history/structure/summary), docs rendered on command |
+| `docs/PHASED_HISTORY_DESIGN.md` | Milestone 1 implemented — `versioning/` package and `gitview versions`; phase records, structure capture, summaries and rendering (milestones 2–5) are not |
 | `JSON_TRACKER_PROPOSAL.md` / `docs/json_tracker_architecture.md` | Not implemented — proposes tracking JSON *config file* diffs specifically; no `json_tracker.py` exists |
 
 ---

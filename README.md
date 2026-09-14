@@ -40,6 +40,7 @@ Example run on this repository:
 | `graph` | Build or update the persistent repository graph (`.gitview/graph.sqlite`) | no |
 | `observe` | Store a structural observation from an external code analyser | no |
 | `motifs` | Detect recurring historical and architectural motifs | no |
+| `versions` | Draft and check a version descriptor; list the phases your versions define | no |
 | `extract` | Extract git history to JSONL | no |
 | `chunk` | Chunk an extracted history into phases | no |
 | `storyline` | Inspect storylines tracked across phases | no |
@@ -53,7 +54,8 @@ Run `gitview <command> --help` for the options of each.
 
 ## Roadmap: Phased History
 
-> **Planned, not implemented.** The commands below do not exist yet. Design:
+> **In progress.** `gitview versions` (milestone 1) is available; phase records,
+> `summarize` and `render` are planned. Design:
 > [docs/PHASED_HISTORY_DESIGN.md](docs/PHASED_HISTORY_DESIGN.md).
 
 Today's reports retell history as one long document and regenerate their
@@ -81,11 +83,43 @@ what is new.
   reports between any two versions.
 
 ```bash
-gitview versions detect --write   # draft the version descriptor
-gitview versions check            # validate it against the whole history
-gitview summarize                 # write records for phases that have none
-gitview render --from 6.24 --to 6.30
+gitview versions detect           # print a draft descriptor, with the evidence behind it
+gitview versions detect --write   # append it to pyproject.toml (or create .gitview.toml)
+gitview versions check            # validate it against the whole history (exit 1 on errors)
+gitview versions                  # list phases: id, dates, commits, steps, sealed/open
+gitview summarize                 # planned: write records for phases that have none
+gitview render --from 6.24 --to 6.30   # planned
 ```
+
+A drafted descriptor for a service whose `app/core/version.py` holds
+`EPOCH/MAJOR/MINOR/PATCH` looks like this; every role stays `"?"` until you set
+it, and `versions check` fails until you do:
+
+```toml
+[tool.gitview.versioning]
+schema = 1
+description = ""
+
+# app/core/version.py assigns EPOCH, MAJOR, MINOR, PATCH
+# 25 version change(s) on HEAD
+[[tool.gitview.versioning.source]]
+kind = "file"
+path = "app/core/version.py"
+parse = "python-assign"
+label = "{EPOCH}.{MAJOR}.{MINOR}.{PATCH}"
+# MINOR changed in 15 commit(s); 10 of their messages mention schema/migration/DDL
+# Docstring: "MINOR — the versioned schema's revision. Every migration bumps it."
+fields.MINOR = { role = "?", suggested = "boundary" }
+# ...
+```
+
+Sources: `tag` (tag names matching a pattern), `file` (a version file read at
+every commit that changes it: `python-assign`, `python-dunder`, `json`, `toml`,
+`regex`, `plain`) and `sequence` (numbered files such as migrations). Versions
+are placed on the branch's first-parent history, so a version bumped or tagged
+on a merged branch takes effect at the merge. When several sources are listed,
+the first one with a version in effect decides, and `check` reports every
+commit where they disagree.
 
 ## Installation
 

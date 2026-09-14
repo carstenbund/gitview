@@ -1,8 +1,8 @@
 # Phased History — Design
 
-Status: **design, not implemented.** Captures the decisions agreed on
-2026-09-14. Milestones at the end; each milestone gets its own plan when it
-starts.
+Status: **milestone 1 (versions) implemented; milestones 2–5 are design.**
+Captures the decisions agreed on 2026-09-14. Milestones at the end; each
+milestone gets its own plan when it starts.
 
 ---
 
@@ -129,7 +129,7 @@ same words (major/minor) mean different things in different repositories.
 |---|---|---|
 | `tag` | Tags matching a pattern | `pattern` (regex with named groups) |
 | `file` | A file's content at each commit that changes it | `path`, `parse` = `python-assign` \| `python-dunder` \| `json` \| `toml` \| `regex` \| `plain` |
-| `sequence` | Numbered files appearing over time | `glob`, `exclude` |
+| `sequence` | Numbered files appearing over time; the highest number so far is the version | `glob`, `exclude`, `number` (regex, default `^(\d+)`), `field` (default `sequence`) |
 | `changelog` | Version headings (later) | `path`, `pattern` |
 
 Sources are listed in priority order. For each commit the first source that
@@ -138,7 +138,13 @@ yields a version wins; `versions check` reports where sources disagree. A
 the file it names.
 
 A `file` source produces an event only when a parsed value changes — an edit
-to comments in the version file is not a version.
+to comments in the version file is not a version. A field missing from an
+older version of the file (e.g. an `EPOCH` added later) is read as unknown,
+not as an error, unless every non-label field is missing.
+
+Versions are placed on the branch's first-parent chain: a version bumped or
+tagged on a merged branch takes effect at the merge commit, and a tag the
+branch never contains is reported and ignored.
 
 ### 5.4 Examples
 
@@ -241,8 +247,21 @@ which component is structural. Roles are therefore suggested, never confirmed:
 fields.MINOR = { role = "?", suggested = "boundary" }
 ```
 
+Detection lists one primary source first and tags second as a cross-check;
+other candidates are written as commented-out alternatives. A version file is
+primary (it records every bump, tags usually only some), unless the project
+derives its version from tags (setuptools-scm, hatch-vcs). A candidate file
+that does not parse at the branch tip (e.g. a `__version__ = "unknown"`
+fallback) is dropped with a note.
+
 `--write` appends the table as text to the existing project file (formatting
-and comments untouched) or creates `.gitview.toml`.
+and comments untouched) or creates `.gitview.toml`. It refuses when a
+descriptor already exists.
+
+*Not in milestone 1:* changelog headings (step 6) and scanning arbitrary files
+for frequently changing version-like fields (step 4); `detect` covers project
+files, tags, `version`-named Python files, `__init__.py`/`__about__.py`,
+`VERSION` files and numbered migration directories.
 
 ### 5.7 Check
 
@@ -251,8 +270,13 @@ fails on:
 
 - an unresolved `role = "?"`;
 - a value that cannot be parsed;
+- two fields sharing the `generation`, `boundary` or `step` role;
+- no field with a sealing role;
 - a component that decreases without a higher-level component increasing;
-- sources that disagree at the same commit.
+- sources that disagree at a commit where one of them changes.
+
+Tags off the branch and sources that yield nothing are warnings. While roles
+are unresolved, phases are still previewed using the `suggested` roles.
 
 It prints the resulting phases. Phased commands refuse to run until `check`
 passes.
@@ -434,7 +458,7 @@ that touches the code.
 
 ## 12. Milestones
 
-1. **Versions.** Descriptor lookup and loading, source translators (`tag`,
+1. **Versions** *(implemented)*. Descriptor lookup and loading, source translators (`tag`,
    `file`, `sequence`), `VersionEvent`, phase derivation, `versions detect`,
    `versions check`, `versions`. Verified on `drm_screen` (tags), `oebv-api`
    (fields) and `oebv-db` (sequence).

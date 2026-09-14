@@ -9,6 +9,21 @@ number moves when a command or a pipeline stage is added.
 
 ## Unreleased
 
+### Added
+
+- **Version descriptors and phases** (`gitview versions`), milestone 1 of
+  [phased history](docs/PHASED_HISTORY_DESIGN.md). A repository describes where
+  it is versioned and what each component means in `[tool.gitview.versioning]`
+  (`pyproject.toml`), `Cargo.toml`, `package.json` or `.gitview.toml`: `tag`,
+  `file` and `sequence` sources mapped onto `generation`/`boundary`/`step`/`label`
+  roles. `versions detect` drafts the descriptor from tags, version files,
+  project-file versions and numbered migrations, with evidence (how often each
+  component changed, how many of those commits mention schema or migrations,
+  the version file's own docstring) and every role left as `"?"` for the owner.
+  `versions check` replays it over the whole branch and fails on unresolved
+  roles, unparseable versions, versions going backwards and sources that
+  disagree; `versions` lists the resulting phases. No LLM.
+
 ### Fixed
 
 - **Rebuilding the repository graph no longer deletes structural

@@ -22,6 +22,9 @@ from .commands import (
     GraphCommand,
     ObserveCommand,
     MotifsCommand,
+    VersionsListCommand,
+    VersionsCheckCommand,
+    VersionsDetectCommand,
 )
 from .commands.storyline import (
     ListStorylineCommand,
@@ -441,6 +444,72 @@ def motifs(**kwargs):
     """Detect historical and architectural motifs."""
     cmd = MotifsCommand(**kwargs)
     cmd.run()
+
+
+VERSIONS_HELP = """Phases from the repository's own versions (no LLM).
+
+\b
+A version descriptor says where the repository is versioned and what each
+component means. GitView looks for it in the project directory, first match
+wins:
+  pyproject.toml   [tool.gitview.versioning]
+  Cargo.toml       [package.metadata.gitview.versioning]
+  package.json     "gitview": {"versioning": ...}
+  .gitview.toml    [versioning]
+
+\b
+Sources: tag (tag names), file (a version file at each commit that changes
+it) and sequence (numbered files such as migrations). Each component gets a
+role: generation or boundary seals a phase (by convention any DDL change is a
+boundary), step is a code-only change inside a phase, label is display only.
+
+\b
+Without a subcommand, lists the phases on the branch.
+
+\b
+EXAMPLES:
+  gitview versions detect           # print a draft descriptor with evidence
+  gitview versions detect --write   # append it to pyproject.toml (or create .gitview.toml)
+  gitview versions check            # validate the descriptor against the whole history
+  gitview versions                  # list phases
+  gitview versions --json
+"""
+
+
+def _versions_options(func):
+    for option in reversed((
+        click.option('--repo', '-r', default=".",
+                     help="Project directory holding the descriptor (default: current directory)"),
+        click.option('--branch', default='HEAD', help="Branch to replay (default: HEAD)"),
+    )):
+        func = option(func)
+    return func
+
+
+@cli.group('versions', invoke_without_command=True, help=VERSIONS_HELP)
+@_versions_options
+@click.option('--json', 'json_output', is_flag=True, help="Print phases and problems as JSON")
+@click.pass_context
+def versions_group(ctx, **kwargs):
+    if ctx.invoked_subcommand is None:
+        VersionsListCommand(**kwargs).run()
+
+
+@versions_group.command('check')
+@_versions_options
+@click.option('--json', 'json_output', is_flag=True, help="Print the result as JSON")
+def versions_check(**kwargs):
+    """Validate the descriptor against the whole history; exit 1 on errors."""
+    VersionsCheckCommand(**kwargs).run()
+
+
+@versions_group.command('detect')
+@_versions_options
+@click.option('--write', is_flag=True,
+              help="Append the draft to the project file, or create .gitview.toml")
+def versions_detect(**kwargs):
+    """Draft a version descriptor from tags, version files and migrations."""
+    VersionsDetectCommand(**kwargs).run()
 
 
 EXTRACT_HELP = """Extract git history to JSONL file (no LLM needed).
