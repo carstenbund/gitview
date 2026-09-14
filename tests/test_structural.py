@@ -286,11 +286,52 @@ def test_observations_are_ordered_by_history_position():
     assert store.latest_structural_observation().observed_sha == 'f' * 40
 
 
-def test_reset_drops_structural_tables():
+def test_reset_keeps_structural_observations():
+    store = _build([_commit(1, 'a.py')])
+    sid, _ = store.insert_structural_snapshot(_snapshot(sha=f"{1:040x}"))
+    store.reset()
+    assert store.counts()['commits'] == 0
+    assert store.counts()['structural_snapshots'] == 1
+    assert len(store.load_structural_snapshot(sid).edges) == len(_snapshot().edges)
+    assert store.structural_observations()[0].sequence is None     # history gone → unplaced
+
+
+def test_reset_can_drop_structural_tables():
     store = _build([_commit(1, 'a.py')])
     store.insert_structural_snapshot(_snapshot())
-    store.reset()
+    store.reset(keep_structural=False)
     assert store.counts()['structural_snapshots'] == 0
+
+
+def test_rebuild_keeps_observations_and_reports_unplaced(synthetic_repo):
+    from gitview.graph import GraphUpdater
+
+    updater = GraphUpdater(synthetic_repo)
+    first = updater.sync()
+    with GraphStore(updater.store_path) as store:
+        store.insert_structural_snapshot(_snapshot(sha=first.metadata.last_commit_hash, content='head'))
+        store.insert_structural_snapshot(_snapshot(sha='f' * 40, content='elsewhere'))
+
+    result = updater.sync(rebuild=True)
+    assert result.action == 'built'
+    assert (result.structural_kept, result.structural_unplaced) == (2, 1)
+    with GraphStore(updater.store_path) as store:
+        placed = [o for o in store.structural_observations() if o.sequence is not None]
+        assert [o.observed_sha for o in placed] == [first.metadata.last_commit_hash]
+
+
+def test_graph_cli_rebuild_keeps_structural(synthetic_repo):
+    repo_path = synthetic_repo
+    _write_graph(repo_path)
+    runner = CliRunner()
+    assert runner.invoke(cli, ['observe', '--repo', str(repo_path), '--structural', 'graphify']).exit_code == 0
+
+    result = runner.invoke(cli, ['graph', '--repo', str(repo_path), '--rebuild', '--json'])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload['action'] == 'built'
+    assert payload['stats']['structural_snapshots'] == 1
+    assert payload['structural_kept'] == 1
 
 
 # ---------------------------------------------------------------------------

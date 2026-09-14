@@ -7,6 +7,19 @@ reaches PyPI together as **0.7.1**.
 Versions follow [semantic versioning](https://semver.org/) loosely: the minor
 number moves when a command or a pipeline stage is added.
 
+## Unreleased
+
+### Fixed
+
+- **Rebuilding the repository graph no longer deletes structural
+  observations.** Every rebuild (`graph --rebuild`, a history rewrite, a branch
+  change, or the version bump that makes the graph rebuild once after an
+  upgrade) dropped the `graphify` snapshots along with the history tables,
+  without a message. They cannot be recreated from git, so the history-plus-
+  structure motifs quietly disappeared. The history tables are now rebuilt on
+  their own; `graph` reports how many observations were kept and warns about
+  any whose commit is no longer in the history.
+
 ## 0.7.1
 
 ### Fixed

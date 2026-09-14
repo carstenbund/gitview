@@ -143,11 +143,14 @@ CREATE TABLE IF NOT EXISTS structural_edges (
 CREATE INDEX IF NOT EXISTS idx_structural_edges_target ON structural_edges(snapshot_id, target);
 """
 
-_TABLES = (
-    'structural_edges', 'structural_nodes', 'structural_snapshots',
+_HISTORY_TABLES = (
     'file_edges', 'commit_prs', 'pull_requests', 'commit_files', 'files',
     'commit_parents', 'commits', 'authors', 'graph_metadata',
 )
+# Observations of trees, not derived from git history: a history rebuild cannot
+# recreate them, so ``reset`` keeps them unless told otherwise. They reference
+# commits only by SHA, never by row id, so they survive the history tables.
+_STRUCTURAL_TABLES = ('structural_edges', 'structural_nodes', 'structural_snapshots')
 
 # Keys of github_context worth persisting as PR metadata (review comment
 # text is deliberately left out; it belongs to the enrichment cache).
@@ -185,9 +188,15 @@ class GraphStore:
         self.conn.executescript(SCHEMA)
         self.conn.commit()
 
-    def reset(self) -> None:
-        """Drop all data and recreate the schema."""
-        for table in _TABLES:
+    def reset(self, *, keep_structural: bool = True) -> None:
+        """Drop the history data and recreate the schema.
+
+        Structural observations are kept by default: they cannot be rebuilt
+        from git. Observations whose commit is absent from the rebuilt history
+        stay stored with an unknown position (``sequence is None``).
+        """
+        tables = _HISTORY_TABLES if keep_structural else _STRUCTURAL_TABLES + _HISTORY_TABLES
+        for table in tables:
             self.conn.execute(f"DROP TABLE IF EXISTS {table}")
         self.conn.commit()
         self.initialize()
